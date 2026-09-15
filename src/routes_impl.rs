@@ -357,8 +357,10 @@ fn expand(input: &ItemImpl) -> syn::Result<TokenStream2> {
     let attrs = &input.attrs;
     let unsafety = &input.unsafety;
     let generics = &input.generics;
-    let trait_ = input.trait_.as_ref().map(|(bang, path, for_)| {
-        quote! { #bang #path #for_ }
+    // syn 3 moved the negative-impl `!` from `trait_` into `modifiers.polarity`.
+    let polarity = &input.modifiers.polarity;
+    let trait_ = input.trait_.as_ref().map(|(path, for_)| {
+        quote! { #polarity #path #for_ }
     });
 
     let expanded = quote! {
