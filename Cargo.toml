@@ -15,7 +15,7 @@ categories = ["development-tools::procedural-macro-helpers"]
 proc-macro = true
 
 [dependencies]
-syn = { version = "2.0", features = ["full", "extra-traits"] }
+syn = { version = "3.0", features = ["full", "extra-traits"] }
 quote = "1.0"
 proc-macro2 = "1.0"
 
@@ -26,7 +26,7 @@ async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_urlencoded = "0.7"
-tokio = { version = "1.52", features = ["rt", "rt-multi-thread", "macros", "time"] }
+tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "macros", "time"] }
 tracing = "0.1"
 trybuild = "1"
 
