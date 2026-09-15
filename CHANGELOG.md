@@ -9,13 +9,36 @@ Earlier changes are recorded in the workspace [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-15
+
+### Changed
+
+- Requires `armature-core` 0.10 (was `0.9`).
+- Migrated to `syn` 3. `#[routes]` now reads the negative-impl `!` from `ItemImpl::modifiers.polarity` (syn 3 removed it from `trait_`); expansion is unchanged.
+
+## [0.4.0] - 2026-08-05
+
+### Changed
+
+- **Requires `armature-core` 0.9 (breaking).** The requirement moved `0.8` →
+  `0.9`. `armature-core 0.9.0` itself moves `armature-h1` across a breaking
+  0.x boundary; because `armature-core` types appear in this crate's own
+  public API, the requirement change is breaking here too and the minor moves
+  with it. Under Cargo's 0.x caret rules the 0.8 and 0.9 types are distinct
+  and do not unify, so a consumer holding an `armature-core 0.8` type cannot
+  pass it to this crate. Part of the `armature-core 0.9.0` release train; see
+  `armature-core`'s CHANGELOG for the publish order.
+
+## [0.3.1] - 2026-08-04
+
 ### Fixed
 
-- **Breaking:** attribute macros reject what they used to discard. `#[body_limit(512kb)]` meant 512 *bytes* (rustc lexes it as a suffixed integer and the suffix was dropped), `#[timeout(hours = 2)]` meant two seconds, and unknown `#[module]`/`#[catch]` keys registered nothing — all silently.
-- The parameter extractors work through `#[routes]`. `#[body]`, `#[param("id")]`, `#[query("page")]` and `#[header]` were documented but unreachable: route attributes were stripped before the extraction codegen could run, so a handler written as documented failed to compile.
-- A handler carrying several route attributes registers all of them; every one after the first was dropped without a diagnostic.
-
-### Changed — `0.2.0` → `0.2.1`
-
-- Migrated onto `armature-core` `0.8`'s `Bytes`-backed request and response types. No behavior change beyond what that migration implies; see [`armature-core/CHANGELOG.md`](../armature-core/CHANGELOG.md).
-- The `Query` derive and the `#[query]` route-parameter extractor deserialize the raw query string instead of re-encoding already-decoded pairs, so a value containing a literal `&`, `=` or `%` round-trips as sent.
+- Requirements on sibling armature crates name a minor instead of `0`. Under
+  Cargo's 0.x rules `version = "0"` matches any release ever made, and edition
+  2024 selects the MSRV-aware resolver, so a consumer declaring an older
+  `rust-version` was handed the oldest version satisfying it — resolving
+  `armature-core = "0"` on Rust 1.89 produced `armature-core 0.2.3` while an
+  explicit `armature-core = "0.8"` elsewhere in the same graph pulled 0.8.2.
+  Two copies of core, and a build failing on symbols the older one lacks. Each
+  0.x minor in this family is a breaking change, so the requirement now names
+  one. No API change.
