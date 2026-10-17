@@ -562,3 +562,52 @@ async fn empty_guard_lists_leave_the_handler_intact() {
     assert_eq!(unguarded(request()).await.unwrap().status, 200);
     assert_eq!(also_unguarded(request()).await.unwrap().status, 200);
 }
+
+// ---------------------------------------------------------------------------
+// The framework's own fail-closed `AuthenticationGuard` in the type form.
+// ---------------------------------------------------------------------------
+
+#[use_guard(armature_core::AuthenticationGuard)]
+async fn needs_identity(req: HttpRequest) -> Result<HttpResponse, Error> {
+    let _ = &req;
+    Ok(HttpResponse::ok())
+}
+
+#[controller("/authn")]
+#[guard(armature_core::AuthenticationGuard)]
+#[derive(Default)]
+struct AuthnController;
+
+#[routes]
+impl AuthnController {
+    #[get("/thing")]
+    async fn thing() -> Result<HttpResponse, Error> {
+        Ok(HttpResponse::ok())
+    }
+}
+
+#[module(controllers: [AuthnController])]
+#[derive(Default)]
+struct AuthnModule;
+
+#[tokio::test]
+async fn authentication_guard_type_form_rejects_anonymous_handler_call() {
+    assert!(needs_identity(request()).await.is_err());
+
+    let mut verified = request();
+    verified
+        .extensions
+        .insert(armature_core::VerifiedIdentity::new("user-1"));
+    assert_eq!(needs_identity(verified).await.unwrap().status, 200);
+}
+
+#[tokio::test]
+async fn authentication_guard_type_form_protects_controller_routes() {
+    let router = build_router::<AuthnModule>();
+    let resp = router.route(get_request("/authn/thing")).await;
+    let status = match resp {
+        Ok(r) => r.status,
+        Err(e) => e.status_code(),
+    };
+    assert_eq!(status, 401, "anonymous request must be rejected");
+}
