@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
+use syn::spanned::Spanned;
 use syn::{
     Attribute, FnArg, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, PatType, Type,
     parse_macro_input,
@@ -11,7 +12,38 @@ use crate::routes::{generate_extraction, parse_extractor_attr, signature_has_ext
 /// One `#[get("/x")]`-style attribute declared on a handler method.
 struct RouteAttr {
     method: String,
+    /// `armature_core::HttpMethod::<VARIANT>` tokens, resolved at expansion
+    /// time so an unknown method is a compile error instead of a silent GET.
+    method_variant: TokenStream2,
     path: String,
+}
+
+/// Map a route attribute's method name to its `armature_core::HttpMethod`
+/// variant. Unknown names are a compile error: they used to fall back to
+/// `GET` at registration, silently exposing the handler on the wrong method.
+pub(crate) fn http_method_variant(
+    name: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<TokenStream2> {
+    let variant = match name.to_ascii_uppercase().as_str() {
+        "GET" => quote!(GET),
+        "POST" => quote!(POST),
+        "PUT" => quote!(PUT),
+        "DELETE" => quote!(DELETE),
+        "PATCH" => quote!(PATCH),
+        "HEAD" => quote!(HEAD),
+        "OPTIONS" => quote!(OPTIONS),
+        "QUERY" => quote!(QUERY),
+        other => {
+            return Err(syn::Error::new(
+                span,
+                format!(
+                    "unknown HTTP method `{other}` (expected GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS or QUERY)"
+                ),
+            ));
+        }
+    };
+    Ok(quote!(armature_core::HttpMethod::#variant))
 }
 
 /// Information about a handler method: every route it declares, plus the shape
@@ -76,8 +108,10 @@ fn extract_route_info(method: &ImplItemFn) -> syn::Result<Option<RouteInfo>> {
             String::new()
         };
 
+        let method_variant = http_method_variant(&method_name, attr.path().span())?;
         routes.push(RouteAttr {
             method: method_name.to_uppercase(),
+            method_variant,
             path,
         });
     }
@@ -225,6 +259,7 @@ fn expand(input: &ItemImpl) -> syn::Result<TokenStream2> {
 
         for route in &route_info.routes {
             let method_str = &route.method;
+            let method_variant = &route.method_variant;
             let path_str = &route.path;
 
             // Route metadata mirroring what the module route registrar
@@ -232,8 +267,7 @@ fn expand(input: &ItemImpl) -> syn::Result<TokenStream2> {
             // `Controller::routes()`.
             route_definitions.push(quote! {
                 armature_core::RouteDefinition {
-                    method: armature_core::HttpMethod::from_str(#method_str)
-                        .unwrap_or(armature_core::HttpMethod::GET),
+                    method: #method_variant,
                     path: #path_str.to_string(),
                     handler_name: #handler_name_str.to_string(),
                 }
@@ -395,4 +429,33 @@ fn expand(input: &ItemImpl) -> syn::Result<TokenStream2> {
     };
 
     Ok(expanded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::http_method_variant;
+    use proc_macro2::Span;
+
+    #[test]
+    fn every_supported_method_maps_to_its_variant() {
+        for m in [
+            "get", "post", "put", "delete", "patch", "head", "options", "query",
+        ] {
+            let tokens = http_method_variant(m, Span::call_site())
+                .unwrap_or_else(|e| panic!("{m} must be accepted: {e}"))
+                .to_string();
+            assert!(
+                tokens.ends_with(&m.to_ascii_uppercase()),
+                "{m} mapped to {tokens}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_method_is_a_compile_error_not_get() {
+        let err = http_method_variant("TRACE", Span::call_site()).unwrap_err();
+        assert!(err.to_string().contains("unknown HTTP method `TRACE`"));
+        assert!(http_method_variant("", Span::call_site()).is_err());
+        assert!(http_method_variant("GETX", Span::call_site()).is_err());
+    }
 }
