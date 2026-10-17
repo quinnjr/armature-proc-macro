@@ -402,8 +402,21 @@ pub fn body_limit(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// # Notes
 ///
 /// - Only successful results (`Ok` variants) are cached
-/// - Cache keys are generated from the function name and arguments
 /// - Default TTL is 3600 seconds (1 hour)
+///
+/// # Cache keys
+///
+/// - **Default**: the module path, the `Self` type (methods), the function
+///   name, its source location and return type, then every argument binding
+///   (destructured patterns included) as length-prefixed JSON. Every argument
+///   must implement `Serialize`; a value that fails to encode at runtime
+///   bypasses the cache rather than risk a shared entry.
+/// - **`key = "..."`**: `{}` (next argument), `{N}` or `{name}` placeholders;
+///   each value's `Display` output is percent-escaped. The template must use
+///   every argument and separate placeholders with a delimiter such as `:`
+///   or `/`, so distinct argument tuples always render distinct keys.
+/// - Arguments bound to `_` or with fields elided by `..` are compile errors:
+///   they cannot be keyed.
 #[proc_macro_attribute]
 pub fn cache(attr: TokenStream, item: TokenStream) -> TokenStream {
     cache_attr::cache_impl(attr, item)
