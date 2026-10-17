@@ -260,6 +260,12 @@ pub(crate) fn generate_extraction(
 }
 
 pub fn route_impl(attr: TokenStream, item: TokenStream, method: &str) -> TokenStream {
+    // Defense in depth: every caller passes a fixed method, but an unknown one
+    // must never reach codegen (it would be served as GET at registration).
+    if let Err(e) = crate::routes_impl::http_method_variant(method, proc_macro2::Span::call_site())
+    {
+        return e.to_compile_error().into();
+    }
     let input = parse_macro_input!(item as ItemFn);
     let func_name = &input.sig.ident;
     let func_output = &input.sig.output;

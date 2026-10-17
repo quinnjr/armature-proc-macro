@@ -381,8 +381,8 @@ async fn annotated_controller_does_not_affect_sibling_controller() {
     );
     assert_eq!(
         guarded.headers.get("X-Guard-Stamp"),
-        None,
-        "guards run before middleware, so a denied request is never stamped"
+        Some(&"1".to_string()),
+        "middleware wraps the guards (Nest order), so it sees the guard's 403"
     );
 
     let plain = router.route(get_request("/plain/thing")).await.unwrap();
@@ -394,6 +394,146 @@ async fn annotated_controller_does_not_affect_sibling_controller() {
         plain.headers.get("X-Guard-Stamp"),
         None,
         "the sibling controller's middleware must not wrap this route"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Ordering: controller middleware runs BEFORE controller guards (NestJS order
+// middleware -> guards -> handler), so an authentication middleware can attach
+// a verified identity that a guard then checks. With the old guards-first
+// order this route was unreachable: the guard never saw the identity.
+// ---------------------------------------------------------------------------
+
+/// Stand-in for a verified identity attached by an authentication middleware
+/// (what `JwtAuthMiddleware` does with `UserContext`).
+#[derive(Clone)]
+struct VerifiedUser {
+    roles: Vec<&'static str>,
+}
+
+/// Authentication middleware: "verifies" the request and attaches the identity.
+struct AttachIdentityMiddleware;
+
+#[async_trait::async_trait]
+impl Middleware for AttachIdentityMiddleware {
+    async fn handle(&self, mut req: HttpRequest, next: Next) -> Result<HttpResponse, Error> {
+        req.insert_extension(VerifiedUser {
+            roles: vec!["admin"],
+        });
+        next(req).await
+    }
+}
+
+/// Role guard that fails closed without a verified identity extension.
+#[derive(Default)]
+struct RequireAdminGuard;
+
+#[async_trait::async_trait]
+impl Guard for RequireAdminGuard {
+    async fn can_activate(&self, ctx: &GuardContext) -> Result<bool, Error> {
+        Ok(ctx
+            .request
+            .extension::<VerifiedUser>()
+            .is_some_and(|u| u.roles.contains(&"admin")))
+    }
+}
+
+static ORDER_LOG: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// Records when it runs relative to the guard and the handler.
+struct LoggingMiddleware;
+
+#[async_trait::async_trait]
+impl Middleware for LoggingMiddleware {
+    async fn handle(&self, req: HttpRequest, next: Next) -> Result<HttpResponse, Error> {
+        ORDER_LOG.lock().unwrap().push("middleware");
+        next(req).await
+    }
+}
+
+#[derive(Default)]
+struct LoggingGuard;
+
+#[async_trait::async_trait]
+impl Guard for LoggingGuard {
+    async fn can_activate(&self, _ctx: &GuardContext) -> Result<bool, Error> {
+        ORDER_LOG.lock().unwrap().push("guard");
+        Ok(true)
+    }
+}
+
+#[controller("/authed")]
+#[guard(RequireAdminGuard)]
+#[middleware(AttachIdentityMiddleware)]
+#[derive(Default)]
+struct AuthedController;
+
+#[routes]
+impl AuthedController {
+    #[get("/thing")]
+    async fn thing() -> Result<HttpResponse, Error> {
+        Ok(HttpResponse::ok())
+    }
+}
+
+#[controller("/unauthed")]
+#[guard(RequireAdminGuard)]
+#[derive(Default)]
+struct UnauthedController;
+
+#[routes]
+impl UnauthedController {
+    #[get("/thing")]
+    async fn thing() -> Result<HttpResponse, Error> {
+        Ok(HttpResponse::ok())
+    }
+}
+
+#[controller("/ordered")]
+#[guard(LoggingGuard)]
+#[middleware(LoggingMiddleware)]
+#[derive(Default)]
+struct OrderedController;
+
+#[routes]
+impl OrderedController {
+    #[get("/thing")]
+    async fn thing() -> Result<HttpResponse, Error> {
+        ORDER_LOG.lock().unwrap().push("handler");
+        Ok(HttpResponse::ok())
+    }
+}
+
+#[module(controllers: [AuthedController, UnauthedController, OrderedController])]
+#[derive(Default)]
+struct OrderingModule;
+
+#[tokio::test]
+async fn controller_middleware_populates_identity_before_guard_runs() {
+    let router = build_router::<OrderingModule>();
+    let resp = router.route(get_request("/authed/thing")).await.unwrap();
+    assert_eq!(
+        resp.status, 200,
+        "the guard must see the identity the controller middleware attached"
+    );
+}
+
+#[tokio::test]
+async fn identity_guard_fails_closed_without_auth_middleware() {
+    let router = build_router::<OrderingModule>();
+    let resp = router.route(get_request("/unauthed/thing")).await.unwrap();
+    assert_eq!(resp.status, 403);
+}
+
+#[tokio::test]
+async fn controller_pipeline_runs_middleware_then_guard_then_handler() {
+    let router = build_router::<OrderingModule>();
+    ORDER_LOG.lock().unwrap().clear();
+    let resp = router.route(get_request("/ordered/thing")).await.unwrap();
+    assert_eq!(resp.status, 200);
+    assert_eq!(
+        *ORDER_LOG.lock().unwrap(),
+        vec!["middleware", "guard", "handler"]
     );
 }
 
