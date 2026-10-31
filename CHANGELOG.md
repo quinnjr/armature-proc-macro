@@ -103,11 +103,13 @@ these fixes only once `armature-validation` depends on this release.
   `Deref` steps (references included), an `AsRef<str>` type — `String`,
   `&str`, `Box<str>`, `Arc<str>`, `Cow<str>`, `Arc<String>`,
   `&Arc<String>`, a `Deref<Target = str>` newtype — and otherwise means
-  "is `Some`" (`Option<u32>`, `Option<Uuid>`, `Option<Vec<T>>`). When the
-  inner type could be a string for some choice of a type parameter (`T`,
-  `T::Assoc`, a type macro, or those behind `&`/`Box`/`Arc`/`Rc`), it
-  requires that type to be `AsRef<str>`, since the derive cannot specialise
-  on it. `required` on `Option<Option<_>>` is a compile error. `custom`
+  "is `Some`" (`Option<u32>`, `Option<Uuid>`). A generic inner type cannot
+  be specialised on, so it fails closed: `T`, `T::Assoc` or (in a generic
+  struct) a type macro, behind any `&`/`Box`/`Arc`/`Rc`/`Cow` layers,
+  requires that core type to be `AsRef<str>`; a container that is never a
+  string (`Vec<T>`, maps, sets, `Option`, tuples, arrays) means "is `Some`";
+  any other type mentioning a parameter (`Wrapper<T>`, `Pin<Box<T>>`) must
+  itself be `AsRef<str>`. `required` on `Option<Option<_>>` is a compile error. `custom`
   validators still get the whole `&Option<T>`, as before, so they can act on
   `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,

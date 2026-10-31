@@ -11,3 +11,18 @@ help: consider restricting type parameter `T` with trait `AsRef`
   |
 6 | struct Named<T: std::convert::AsRef<str>> {
   |               ++++++++++++++++++++++++++
+
+error[E0277]: the trait bound `Wrapper<T>: AsRef<str>` is not satisfied
+  --> tests/ui/validate_generic_required.rs:15:10
+   |
+15 | #[derive(Validate)]
+   |          ^^^^^^^^ unsatisfied trait bound
+16 | struct Wrapped<T> {
+17 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+help: the trait `AsRef<str>` is not implemented for `Wrapper<T>`
+  --> tests/ui/validate_generic_required.rs:13:1
+   |
+13 | struct Wrapper<T>(T);
+   | ^^^^^^^^^^^^^^^^^

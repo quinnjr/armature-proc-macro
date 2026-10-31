@@ -241,10 +241,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
         let optional = match inner {
             None => Optional::No,
-            Some(inner) => match generic_string_candidate(inner, &type_params) {
-                Some(layers) => Optional::Generic(layers),
-                None => Optional::Concrete,
-            },
+            Some(inner) => classify_optional(inner, &type_params),
         };
         needs_not_empty_helpers |= required && optional == Optional::Concrete;
         let access = quote! { self.#field_ident };
@@ -591,16 +588,38 @@ enum Optional {
     Generic(usize),
 }
 
-/// If `ty` could be a string for some choice of the struct's type
-/// parameters — a bare parameter, an associated type of one, or a type macro
-/// (which the derive cannot see into), behind any number of `&`, `Box`,
-/// `Arc` or `Rc` layers — the number of those layers.
-fn generic_string_candidate(ty: &Type, params: &[syn::Ident]) -> Option<usize> {
+/// How `required` treats an `Option` whose inner type is `ty`, in a struct
+/// with type parameters `params`. Specialisation cannot see through a type
+/// parameter, so a generic inner type must not reach it unless it can never
+/// be a string:
+///
+/// - a parameter, an associated type of one, or (in a generic struct) a type
+///   macro, behind any number of `&`, `Box`, `Arc`, `Rc` or `Cow` layers:
+///   `Generic(layers)`, which requires the core type to be `AsRef<str>`;
+/// - a container that is never a string (`Vec`, maps, sets, `Option`,
+///   tuples, arrays, slices): `Concrete`, i.e. specialisation (→ "is `Some`");
+/// - any other type that mentions a parameter (`MyWrapper<T>`,
+///   `Pin<Box<T>>`): `Generic(0)`, which requires the whole type to be
+///   `AsRef<str>` — a compile error unless it is, rather than a silent
+///   "is `Some`";
+/// - anything else: `Concrete`.
+fn classify_optional(ty: &Type, params: &[syn::Ident]) -> Optional {
+    if let Some(layers) = generic_string_core(ty, params) {
+        return Optional::Generic(layers);
+    }
+    if !mentions_type_param(ty, params) || never_a_string(ty) {
+        return Optional::Concrete;
+    }
+    Optional::Generic(0)
+}
+
+/// Layers of `&`/`Box`/`Arc`/`Rc`/`Cow` over a type-parameter core, if any.
+fn generic_string_core(ty: &Type, params: &[syn::Ident]) -> Option<usize> {
     match ty {
-        Type::Group(g) => generic_string_candidate(&g.elem, params),
-        Type::Paren(p) => generic_string_candidate(&p.elem, params),
-        Type::Macro(_) => Some(0),
-        Type::Reference(r) => generic_string_candidate(&r.elem, params).map(|n| n + 1),
+        Type::Group(g) => generic_string_core(&g.elem, params),
+        Type::Paren(p) => generic_string_core(&p.elem, params),
+        Type::Macro(_) => (!params.is_empty()).then_some(0),
+        Type::Reference(r) => generic_string_core(&r.elem, params).map(|n| n + 1),
         Type::Path(p) => {
             if p.qself.is_some() {
                 return mentions_type_param(ty, params).then_some(0);
@@ -610,20 +629,56 @@ fn generic_string_candidate(ty: &Type, params: &[syn::Ident]) -> Option<usize> {
                 return Some(0);
             }
             let last = p.path.segments.last()?;
-            if !matches!(last.ident.to_string().as_str(), "Box" | "Arc" | "Rc") {
+            if !matches!(
+                last.ident.to_string().as_str(),
+                "Box" | "Arc" | "Rc" | "Cow"
+            ) {
                 return None;
             }
             let PathArguments::AngleBracketed(args) = &last.arguments else {
                 return None;
             };
-            match args.args.first()? {
-                GenericArgument::Type(inner) if args.args.len() == 1 => {
-                    generic_string_candidate(inner, params).map(|n| n + 1)
-                }
+            // The pointee: `Box<T>`, `Arc<T>`, `Rc<T>`, `Cow<'a, T>` (skip the
+            // lifetime). An allocator argument (`Box<T, A>`) is not unwrapped.
+            let types: Vec<&Type> = args
+                .args
+                .iter()
+                .filter_map(|a| match a {
+                    GenericArgument::Type(t) => Some(t),
+                    _ => None,
+                })
+                .collect();
+            match types.as_slice() {
+                [inner] => generic_string_core(inner, params).map(|n| n + 1),
                 _ => None,
             }
         }
         _ => None,
+    }
+}
+
+/// Containers that are never a string whatever their parameters.
+fn never_a_string(ty: &Type) -> bool {
+    match ty {
+        Type::Group(g) => never_a_string(&g.elem),
+        Type::Paren(p) => never_a_string(&p.elem),
+        Type::Tuple(_) | Type::Array(_) | Type::Slice(_) => true,
+        Type::Path(p) if p.qself.is_none() => p.path.segments.last().is_some_and(|s| {
+            matches!(
+                s.ident.to_string().as_str(),
+                "Vec"
+                    | "VecDeque"
+                    | "LinkedList"
+                    | "BinaryHeap"
+                    | "HashMap"
+                    | "BTreeMap"
+                    | "HashSet"
+                    | "BTreeSet"
+                    | "Option"
+                    | "Result"
+            )
+        }),
+        _ => false,
     }
 }
 
@@ -661,7 +716,8 @@ fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
 /// 2. – 4. one, two or three `Deref` steps to an `AsRef<str>` type
 ///    (`Arc<String>`, `&Arc<String>`, `Rc<DerefToStr>`,
 ///    `&Rc<Box<String>>`, ...): emptiness check through the derefs, as deref
-///    coercion would do for the same type outside an `Option`;
+///    coercion would do for the same type outside an `Option` (for up to
+///    three steps; a deeper chain gets only the `Some` check);
 /// 5. otherwise (a number, a `Uuid`, a nested struct): only the `Some`
 ///    check.
 ///
@@ -878,12 +934,11 @@ fn emit_check(
         }
         // Autoref specialisation cannot see through a type parameter: inside
         // the generic `validate()` it would always pick the "is `Some`"
-        // fallback, even for `S<String>`. So for an inner type that could be
-        // a string for some choice of the parameter, require that parameter
-        // (under its `&`/`Box`/`Arc`/`Rc` layers) to be `AsRef<str>`; without
+        // fallback, even for `S<String>`. So a generic inner type that might
+        // be a string requires `AsRef<str>` (of its core, under any
+        // `&`/`Box`/`Arc`/`Rc`/`Cow` layers, or of the whole type); without
         // that bound it fails to compile rather than silently skipping the
-        // emptiness check. Other generic inner types (`Vec<T>`, `Id<T>`) can
-        // never be strings and use the specialisation below.
+        // emptiness check. See `classify_optional`.
         Check::Required if matches!(optional, Optional::Generic(_)) => {
             let Optional::Generic(layers) = optional else {
                 unreachable!()

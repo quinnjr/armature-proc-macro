@@ -584,26 +584,47 @@ fn required_on_optional_multi_deref_strings_checks_emptiness() {
     assert_eq!(fields(&empty.validate().unwrap_err()), ["a", "b", "c", "d"]);
 }
 
-/// A generic inner type that can never be a string (`Vec<T>`, a typed id)
-/// means "is `Some`"; one that can (`T` behind `Box`) needs `T: AsRef<str>`
+/// A generic inner type that can never be a string (`Vec<T>`, a map) means
+/// "is `Some`"; one that can (`T` behind `Box` or `Cow`) needs `T: AsRef<str>`
 /// and checks emptiness.
 #[test]
 fn required_on_generic_wrappers() {
-    struct Id<T>(u64, std::marker::PhantomData<T>);
+    use std::borrow::Cow;
+    use std::collections::HashMap;
     #[derive(Validate)]
-    struct S<T: AsRef<str>> {
+    struct S<'a, T: AsRef<str> + ToOwned + ?Sized> {
         #[validate(required)]
         boxed: Option<Box<T>>,
         #[validate(required)]
-        many: Option<Vec<T>>,
+        cow: Option<Cow<'a, T>>,
         #[validate(required)]
-        id: Option<Id<T>>,
+        many: Option<Vec<Box<T>>>,
+        #[validate(required)]
+        map: Option<HashMap<String, Box<T>>>,
     }
-    let s: S<String> = S {
-        boxed: Some(Box::new(String::new())),
+    let s: S<'_, str> = S {
+        boxed: Some(Box::from("")),
+        cow: Some(Cow::Borrowed("")),
         many: Some(Vec::new()),
-        id: Some(Id(1, std::marker::PhantomData)),
+        map: Some(HashMap::new()),
     };
-    assert_eq!(fields(&s.validate().unwrap_err()), ["boxed"]);
-    let _ = s.id.map(|i| i.0);
+    assert_eq!(fields(&s.validate().unwrap_err()), ["boxed", "cow"]);
+}
+
+/// A type macro in a struct without type parameters is a concrete type and
+/// goes through the usual specialisation.
+#[test]
+fn required_on_optional_macro_type_in_concrete_struct() {
+    macro_rules! num {
+        () => {
+            u32
+        };
+    }
+    #[derive(Validate)]
+    struct M {
+        #[validate(required)]
+        f: Option<num!()>,
+    }
+    assert!(M { f: Some(0) }.validate().is_ok());
+    assert!(M { f: None }.validate().is_err());
 }
