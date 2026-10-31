@@ -139,15 +139,16 @@ these fixes only once `armature-validation` depends on this release.
   `std::` path or `custom`; a crate shadowing `std` itself is not
   supported). In a struct with type or const parameters or a where-clause
   type predicate, where `required` is checked in place through such
-  pointers, the generated code asserts that they dereference to the type
-  underneath and checks that type, so a look-alike pointer in scope fails
-  to compile or is checked through to its contents rather than skip the
-  check. Beyond that, a user type with one of those names should behave
-  like the standard one (a user `Box<T>` without `Deref` fails to compile with "cannot be
-  dereferenced"). In particular, a user type in scope under a container's
-  bare name that derefs to a string only for some arguments or only under a
-  where-clause, used with a type parameter, gets only the `Some` check: the
-  derive cannot isolate a type that mentions a type parameter.
+  pointers to a type that mentions a parameter (`Box<Vec<T>>`), the
+  generated code asserts that they dereference to the type underneath, so
+  a look-alike pointer in scope without a matching `Deref` fails to compile
+  ("cannot be dereferenced") rather than skip the check. Elsewhere a user
+  type with one of those names gets the checks its own impls allow
+  (without `Deref` or `AsRef<str>`, only `Some`). In particular, a user
+  type in scope under a pointer's or container's bare name that is or
+  derefs to a string only for some arguments or only under a where-clause,
+  used with a type parameter, gets only the `Some` check: the derive cannot
+  isolate a type that mentions a type parameter.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator

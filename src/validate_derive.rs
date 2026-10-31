@@ -387,16 +387,19 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     for _ in 0..layers {
                         derefed = quote! { &**(#derefed) };
                     }
-                    // `&dyn A + B` would not parse.
+                    // Defensive: a trait-object core is isolated or
+                    // `Generic`, never proven here, but `&dyn A + B` would
+                    // not parse if one ever were.
                     let core = match core {
                         Type::TraitObject(_) => quote! { (#core) },
                         core => quote! { #core },
                     };
-                    // Rebinding the value to the proven core also makes the
-                    // check below specialise on it, not on the pointer, so a
-                    // look-alike's own (partial) `AsRef<str>` is never
-                    // consulted. For a look-alike this runs its `deref`.
-                    quote! { let #value: &#core = #derefed; }
+                    // A proof only: the check below still specialises on the
+                    // pointer, so a look-alike's own `AsRef<str>` is still
+                    // honoured (the core here is never a string, so checking
+                    // it instead could only drop checks). For a look-alike
+                    // this runs its `deref`.
+                    quote! { let _: &#core = #derefed; }
                 });
             quote! {
                 if let ::std::option::Option::Some(#value) = &#access {

@@ -1036,7 +1036,8 @@ fn required_self_in_tuple_under_predicate_means_some() {
 }
 
 /// Trait objects with several bounds behind pointers compile, in structs
-/// with and without where-clause type predicates.
+/// with and without where-clause type predicates (they are isolated, so the
+/// in-place pointer proof never sees them).
 #[test]
 fn required_on_optional_multi_bound_trait_objects() {
     trait Tr: AsRef<str> {}
@@ -1072,12 +1073,12 @@ fn required_on_optional_multi_bound_trait_objects() {
     assert_eq!(fields(&p.validate().unwrap_err()), ["a", "b"]);
 }
 
-/// In a generic struct, a look-alike pointer that is `AsRef<str>` only for
-/// some arguments does not steer `required`: the check runs on the proven
-/// core under the pointer (here a tuple, so "is `Some`"), never on the
-/// look-alike's own `AsRef`.
+/// In a generic struct, proving a look-alike pointer's layers does not drop
+/// its own `AsRef<str>`: an empty string it reports is still rejected. In a
+/// plain struct, where no proof runs, a look-alike without `Deref` gets the
+/// checks its own impls allow.
 #[test]
-fn required_checks_the_proven_core_not_a_lookalike_pointer() {
+fn required_proof_keeps_a_lookalike_pointers_own_check() {
     mod lk {
         pub struct Box<T>(pub T, pub String);
         impl<T> std::ops::Deref for Box<T> {
@@ -1086,26 +1087,49 @@ fn required_checks_the_proven_core_not_a_lookalike_pointer() {
                 &self.0
             }
         }
-        impl AsRef<str> for Box<(u8,)> {
+        impl<T> AsRef<str> for Box<T> {
             fn as_ref(&self) -> &str {
                 &self.1
             }
         }
+        pub struct Rc<T>(pub T);
     }
-    use lk::Box;
+    use lk::{Box, Rc};
     #[derive(Validate)]
     struct S<T> {
         #[validate(required)]
         f: Option<Box<(T,)>>,
     }
-    // The look-alike's `AsRef` would report an empty string; the core is a
-    // tuple, never a string, so only presence is checked.
+    assert_eq!(
+        fields(
+            &S::<u8> {
+                f: Some(Box((1,), String::new()))
+            }
+            .validate()
+            .unwrap_err()
+        ),
+        ["f"]
+    );
     assert!(
         S::<u8> {
-            f: Some(Box((1,), String::new()))
+            f: Some(Box((1,), "x".to_owned()))
         }
         .validate()
         .is_ok()
     );
     assert!(S::<u8> { f: None }.validate().is_err());
+
+    #[derive(Validate)]
+    struct N {
+        #[validate(required)]
+        f: Option<Rc<String>>,
+    }
+    assert!(
+        N {
+            f: Some(Rc(String::new()))
+        }
+        .validate()
+        .is_ok()
+    );
+    assert!(N { f: None }.validate().is_err());
 }
