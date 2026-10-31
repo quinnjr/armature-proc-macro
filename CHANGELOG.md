@@ -135,13 +135,15 @@ these fixes only once `armature-validation` depends on this release.
 
   `Box`, `Arc`, `Rc`, `Cow` and the container names are recognised by name,
   and only when written bare or under `std`/`alloc`/`core` (so
-  `io::Result<T>` in a generic struct needs `std::io::Result<T>` or
-  `custom`; a crate shadowing `std` itself is not supported). Where
-  `required` is then checked in place through such pointers, the generated
-  code asserts that they dereference to the type underneath, so a
-  look-alike pointer in scope fails to compile rather than skip the check;
-  so a user type with one of those names should behave like the standard
-  one (a user `Box<T>` without `Deref` fails to compile with "cannot be
+  `io::Result<T>` or `sync::Arc<T>` in a generic struct needs the full
+  `std::` path or `custom`; a crate shadowing `std` itself is not
+  supported). In a struct with type or const parameters or a where-clause
+  type predicate, where `required` is checked in place through such
+  pointers, the generated code asserts that they dereference to the type
+  underneath and checks that type, so a look-alike pointer in scope fails
+  to compile or is checked through to its contents rather than skip the
+  check. Beyond that, a user type with one of those names should behave
+  like the standard one (a user `Box<T>` without `Deref` fails to compile with "cannot be
   dereferenced"). In particular, a user type in scope under a container's
   bare name that derefs to a string only for some arguments or only under a
   where-clause, used with a type parameter, gets only the `Some` check: the

@@ -372,7 +372,13 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             // scope, or a where-clause hiding a real one's `Target`, then
             // fails to compile instead of letting specialisation fall back to
             // "is `Some`".
-            let layers_proof = (required && optional == Optional::Concrete && isolated.is_none())
+            // Only where isolation would be needed: without type or const
+            // parameters or where-clause type predicates the in-place check
+            // is already exact.
+            let layers_proof = (required
+                && optional == Optional::Concrete
+                && isolated.is_none()
+                && needs_isolation)
                 .then(|| inner.map(peel_pointers))
                 .flatten()
                 .filter(|(_, layers)| *layers > 0)
@@ -381,7 +387,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     for _ in 0..layers {
                         derefed = quote! { &**(#derefed) };
                     }
-                    quote! { let _: &#core = #derefed; }
+                    // `&dyn A + B` would not parse.
+                    let core = match core {
+                        Type::TraitObject(_) => quote! { (#core) },
+                        core => quote! { #core },
+                    };
+                    // Rebinding the value to the proven core also makes the
+                    // check below specialise on it, not on the pointer, so a
+                    // look-alike's own (partial) `AsRef<str>` is never
+                    // consulted. For a look-alike this runs its `deref`.
+                    quote! { let #value: &#core = #derefed; }
                 });
             quote! {
                 if let ::std::option::Option::Some(#value) = &#access {

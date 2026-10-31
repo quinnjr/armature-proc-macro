@@ -1034,3 +1034,78 @@ fn required_self_in_tuple_under_predicate_means_some() {
     assert_eq!(fields(&t.validate().unwrap_err()), ["pair"]);
     let _ = t.tag;
 }
+
+/// Trait objects with several bounds behind pointers compile, in structs
+/// with and without where-clause type predicates.
+#[test]
+fn required_on_optional_multi_bound_trait_objects() {
+    trait Tr: AsRef<str> {}
+    impl Tr for String {}
+    #[derive(Validate)]
+    struct S<'a> {
+        #[validate(required)]
+        a: Option<Box<dyn Tr + Send>>,
+        #[validate(required)]
+        b: Option<&'a (dyn Tr + Sync)>,
+    }
+    let empty = String::new();
+    let s = S {
+        a: Some(Box::new(String::new())),
+        b: Some(&empty),
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["a", "b"]);
+
+    #[derive(Validate)]
+    struct P<'a>
+    where
+        String: Sized,
+    {
+        #[validate(required)]
+        a: Option<Box<dyn Tr + Send>>,
+        #[validate(required)]
+        b: Option<&'a (dyn Tr + Sync)>,
+    }
+    let p = P {
+        a: Some(Box::new(String::new())),
+        b: Some(&empty),
+    };
+    assert_eq!(fields(&p.validate().unwrap_err()), ["a", "b"]);
+}
+
+/// In a generic struct, a look-alike pointer that is `AsRef<str>` only for
+/// some arguments does not steer `required`: the check runs on the proven
+/// core under the pointer (here a tuple, so "is `Some`"), never on the
+/// look-alike's own `AsRef`.
+#[test]
+fn required_checks_the_proven_core_not_a_lookalike_pointer() {
+    mod lk {
+        pub struct Box<T>(pub T, pub String);
+        impl<T> std::ops::Deref for Box<T> {
+            type Target = T;
+            fn deref(&self) -> &T {
+                &self.0
+            }
+        }
+        impl AsRef<str> for Box<(u8,)> {
+            fn as_ref(&self) -> &str {
+                &self.1
+            }
+        }
+    }
+    use lk::Box;
+    #[derive(Validate)]
+    struct S<T> {
+        #[validate(required)]
+        f: Option<Box<(T,)>>,
+    }
+    // The look-alike's `AsRef` would report an empty string; the core is a
+    // tuple, never a string, so only presence is checked.
+    assert!(
+        S::<u8> {
+            f: Some(Box((1,), String::new()))
+        }
+        .validate()
+        .is_ok()
+    );
+    assert!(S::<u8> { f: None }.validate().is_err());
+}
