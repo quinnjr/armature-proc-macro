@@ -98,27 +98,27 @@ these fixes only once `armature-validation` depends on this release.
 - `Option<T>` fields (detected syntactically; a type alias is not seen
   through, so an alias for `Option` also escapes the `Option<Option<_>>`
   check below): built-in rules and `nested` apply to the value when it is
-  `Some` and are skipped for `None`. `required` also rejects `None`, and
-  checks emptiness when the inner type is, or reaches through up to three
-  `Deref` steps (references included), an `AsRef<str>` type — `String`,
-  `&str`, `Box<str>`, `Arc<str>`, `Cow<str>`, `Arc<String>`,
-  `&Arc<String>`, a `Deref<Target = str>` newtype — and otherwise means
-  "is `Some`" (`Option<u32>`, `Option<Uuid>`). A generic inner type cannot
-  be specialised on, so it fails closed: `T`, `T::Assoc` or (in a generic
-  struct) a type macro, behind any `&`/`Box`/`Arc`/`Rc`/`Cow` layers,
-  requires that core type to be `AsRef<str>`; a container that is never a
-  string (`Vec<T>`, maps, sets, `Option`, tuples, arrays, slices — also
-  behind a pointer) means "is `Some`";
-  any other type mentioning a parameter (`Wrapper<T>`, `Pin<Box<T>>`) must
-  itself be `AsRef<str>`. These fail to compile rather than skip the check;
-  for a presence-only check on a non-string generic (`Option<C>` with a
-  numeric `C`), use `custom`; the compile error says so. A type macro in a
-  generic struct counts as generic, and const parameters count like type
-  parameters. `Box`, `Arc`, `Rc`, `Cow` and the container names are
-  recognised by name, so a user type with one of those names should behave
-  like the standard one. `required` on `Option<Option<_>>` is a compile error. `custom`
-  validators still get the whole `&Option<T>`, as before, so they can act on
-  `None`.
+  `Some` and are skipped for `None`. `custom` validators still get the whole
+  `&Option<T>`, as before, so they can act on `None`. `required` also
+  rejects `None`, and:
+  - checks emptiness when the inner type is, or reaches through up to three
+    `Deref` steps (references included), an `AsRef<str>` type — `String`,
+    `&str`, `Box<str>`, `Arc<str>`, `Cow<str>`, `Arc<String>`,
+    `&Arc<String>`, a `Deref<Target = str>` newtype;
+  - otherwise means "is `Some`" (`Option<u32>`, `Option<Uuid>`);
+  - on a generic inner type, which cannot be specialised on, fails closed:
+    `T`, `T::Assoc` or a type macro, behind any `&`/`Box`/`Arc`/`Rc`/`Cow`
+    layers, must be `AsRef<str>`; a container that is never a string
+    (`Vec<T>`, maps, sets, `Result`, tuples, arrays, slices — also behind a
+    pointer) means "is `Some`"; any other type mentioning a type or const
+    parameter, or `Self` (`Wrapper<T>`, `Pin<Box<T>>`, `C<N>`), must itself
+    be `AsRef<str>`. These fail to compile, with a message pointing to
+    `custom` for a presence-only check, rather than skip the check;
+  - on `Option<Option<_>>` is a compile error.
+
+  `Box`, `Arc`, `Rc`, `Cow` and the container names are recognised by name,
+  so a user type with one of those names should behave like the standard
+  one.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator

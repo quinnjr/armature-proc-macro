@@ -767,9 +767,11 @@ fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
             }
         }
         fn visit_path(&mut self, path: &'ast syn::Path) {
+            // `Self` in a generic struct stands for it with its parameters.
             if path.leading_colon.is_none()
                 && let Some(first) = path.segments.first()
-                && self.params.contains(&first.ident)
+                && (self.params.contains(&first.ident)
+                    || (first.ident == "Self" && !self.params.is_empty()))
             {
                 self.found = true;
             }
