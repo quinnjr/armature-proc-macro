@@ -45,3 +45,9 @@ error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
    |
 49 |     a: Option<Option<String>>,
    |        ^^^^^^
+
+error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
+  --> tests/ui/validate_bad_rules.rs:55:8
+   |
+55 |     a: Option<Box<Option<String>>>,
+   |        ^^^^^^

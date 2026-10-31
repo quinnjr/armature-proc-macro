@@ -649,3 +649,26 @@ fn required_on_generic_containers_behind_pointers() {
     };
     assert!(s.validate().is_ok());
 }
+
+/// A generic string wrapper behind a pointer is checked as the wrapper.
+#[test]
+fn required_on_boxed_generic_string_wrapper() {
+    struct W<T>(T);
+    impl<T: AsRef<str>> AsRef<str> for W<T> {
+        fn as_ref(&self) -> &str {
+            self.0.as_ref()
+        }
+    }
+    #[derive(Validate)]
+    struct S<T>
+    where
+        W<T>: AsRef<str>,
+    {
+        #[validate(required)]
+        f: Option<Box<W<T>>>,
+    }
+    let s: S<String> = S {
+        f: Some(Box::new(W(String::new()))),
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["f"]);
+}

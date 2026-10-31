@@ -241,7 +241,11 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let required = checks.iter().any(|r| matches!(r.check, Check::Required));
         // `required` on `Option<Option<T>>` could mean either layer; rather
         // than let the inner `None` pass as "present", reject it.
-        if required && inner.and_then(option_inner).is_some() {
+        if required
+            && inner
+                .and_then(|i| option_inner(peel_pointers(i).0))
+                .is_some()
+        {
             return Err(syn::Error::new(
                 field.ty.span(),
                 "`required` on `Option<Option<_>>` is ambiguous; use `custom`",
@@ -601,20 +605,24 @@ enum Optional {
     Generic(usize),
 }
 
-/// How `required` treats an `Option` whose inner type is `ty`, in a struct
-/// with type parameters `params`. Specialisation cannot see through a type
-/// parameter, so a generic inner type must not reach it unless it can never
-/// be a string:
+/// How `required` treats an `Option` whose inner type is `ty`. `type_params`
+/// are the struct's type parameters (a core that is one of them, behind
+/// pointers, is unwrapped and checked); `generic_params` adds its const
+/// parameters (either makes trait impls unknown inside the generic
+/// `validate()`), and `Self` or any type macro in a generic struct counts as
+/// mentioning them. Specialisation cannot see through a parameter, so a
+/// generic inner type must not reach it unless it can never be a string:
 ///
 /// - a parameter, an associated type of one, or (in a generic struct) a type
 ///   macro, behind any number of `&`, `Box`, `Arc`, `Rc` or `Cow` layers:
 ///   `Generic(layers)`, which requires the core type to be `AsRef<str>`;
-/// - a container that is never a string (`Vec`, maps, sets, `Option`,
-///   tuples, arrays, slices): `Concrete`, i.e. specialisation (→ "is `Some`");
+/// - a container that is never a string (`Vec`, maps, sets, `Result`,
+///   tuples, arrays, slices), also behind pointers: `Concrete`, i.e.
+///   specialisation (→ "is `Some`");
 /// - any other type that mentions a parameter (`MyWrapper<T>`,
-///   `Pin<Box<T>>`): `Generic(0)`, which requires the whole type to be
-///   `AsRef<str>` — a compile error unless it is, rather than a silent
-///   "is `Some`";
+///   `Pin<Box<T>>`): `Generic(layers)`, which requires the type under any
+///   pointer layers to be `AsRef<str>` — a compile error unless it is,
+///   rather than a silent "is `Some`";
 /// - anything else: `Concrete`.
 fn classify_optional(
     ty: &Type,
@@ -624,42 +632,52 @@ fn classify_optional(
     if let Some(layers) = generic_string_core(ty, type_params) {
         return Optional::Generic(layers);
     }
-    if !mentions_type_param(ty, generic_params) || never_a_string(peel_pointers(ty)) {
+    let (core, layers) = peel_pointers(ty);
+    if !mentions_type_param(ty, generic_params) || never_a_string(core) {
         return Optional::Concrete;
     }
-    Optional::Generic(0)
+    // Ask for `AsRef<str>` of the type under the pointers (`W<T>` in
+    // `Box<W<T>>`), which a string wrapper can satisfy, not of the pointer.
+    Optional::Generic(layers)
 }
 
-/// `ty` without its outer `&`/`Box`/`Arc`/`Rc`/`Cow` layers, so a container
-/// behind a pointer (`&[T]`, `Box<[T]>`, `Arc<Vec<T>>`) is still recognised.
-fn peel_pointers(ty: &Type) -> &Type {
+/// `ty` without its outer `&`/`Box`/`Arc`/`Rc`/`Cow` layers, and how many
+/// there were, so a container behind a pointer (`&[T]`, `Box<[T]>`,
+/// `Arc<Vec<T>>`) is still recognised.
+fn peel_pointers(ty: &Type) -> (&Type, usize) {
     match ty {
         Type::Group(g) => peel_pointers(&g.elem),
         Type::Paren(p) => peel_pointers(&p.elem),
-        Type::Reference(r) => peel_pointers(&r.elem),
+        Type::Reference(r) => {
+            let (core, n) = peel_pointers(&r.elem);
+            (core, n + 1)
+        }
         Type::Path(p) if p.qself.is_none() => {
             let Some(last) = p.path.segments.last() else {
-                return ty;
+                return (ty, 0);
             };
             if !matches!(
                 last.ident.to_string().as_str(),
                 "Box" | "Arc" | "Rc" | "Cow"
             ) {
-                return ty;
+                return (ty, 0);
             }
             let PathArguments::AngleBracketed(args) = &last.arguments else {
-                return ty;
+                return (ty, 0);
             };
             let mut types = args.args.iter().filter_map(|a| match a {
                 GenericArgument::Type(t) => Some(t),
                 _ => None,
             });
             match (types.next(), types.next()) {
-                (Some(inner), None) => peel_pointers(inner),
-                _ => ty,
+                (Some(inner), None) => {
+                    let (core, n) = peel_pointers(inner);
+                    (core, n + 1)
+                }
+                _ => (ty, 0),
             }
         }
-        _ => ty,
+        _ => (ty, 0),
     }
 }
 
@@ -670,14 +688,14 @@ fn generic_required_helper() -> TokenStream2 {
         #[diagnostic::on_unimplemented(
             message = "`#[validate(required)]` on an `Option` of `{Self}` needs `{Self}: AsRef<str>`",
             label = "the derive cannot tell whether this generic type is a string",
-            note = "bound the type parameter by `AsRef<str>`, or use `custom` for a presence-only check"
+            note = "make `{Self}` implement `AsRef<str>` (for a type parameter, bound it), or use `custom` for a presence-only check"
         )]
         trait __ArmatureRequiredStr {
             fn __armature_str(&self) -> &str;
         }
         impl<T: ?::core::marker::Sized + ::core::convert::AsRef<str>> __ArmatureRequiredStr for T {
             fn __armature_str(&self) -> &str {
-                self.as_ref()
+                ::core::convert::AsRef::<str>::as_ref(self)
             }
         }
     }
@@ -744,7 +762,6 @@ fn never_a_string(ty: &Type) -> bool {
                     | "BTreeMap"
                     | "HashSet"
                     | "BTreeSet"
-                    | "Option"
                     | "Result"
             )
         }),

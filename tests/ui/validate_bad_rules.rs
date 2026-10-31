@@ -49,4 +49,10 @@ struct NestedOptionRequired {
     a: Option<Option<String>>,
 }
 
+#[derive(Validate)]
+struct NestedOptionBehindPointer {
+    #[validate(required)]
+    a: Option<Box<Option<String>>>,
+}
+
 fn main() {}

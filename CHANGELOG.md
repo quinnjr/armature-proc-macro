@@ -107,14 +107,17 @@ these fixes only once `armature-validation` depends on this release.
     `&Arc<String>`, a `Deref<Target = str>` newtype;
   - otherwise means "is `Some`" (`Option<u32>`, `Option<Uuid>`);
   - on a generic inner type, which cannot be specialised on, fails closed:
-    `T`, `T::Assoc` or a type macro, behind any `&`/`Box`/`Arc`/`Rc`/`Cow`
-    layers, must be `AsRef<str>`; a container that is never a string
-    (`Vec<T>`, maps, sets, `Result`, tuples, arrays, slices — also behind a
-    pointer) means "is `Some`"; any other type mentioning a type or const
-    parameter, or `Self` (`Wrapper<T>`, `Pin<Box<T>>`, `C<N>`), must itself
-    be `AsRef<str>`. These fail to compile, with a message pointing to
-    `custom` for a presence-only check, rather than skip the check;
-  - on `Option<Option<_>>` is a compile error.
+    `T`, `T::Assoc` or (in a generic struct) a type macro, behind any
+    `&`/`Box`/`Arc`/`Rc`/`Cow` layers, must be `AsRef<str>`; a container
+    that is never a string (`Vec<T>`, maps, sets, `Result`, tuples, arrays,
+    slices — also behind a pointer) means "is `Some`"; any other type
+    mentioning a type or const parameter, or `Self` (`Wrapper<T>`,
+    `Pin<Box<T>>`, `C<N>`), must be `AsRef<str>` under its pointer layers.
+    These fail to compile, with a message pointing to `custom` for a
+    presence-only check, rather than skip the check. (The message uses
+    `#[diagnostic::on_unimplemented]`, which a `#![no_implicit_prelude]`
+    crate cannot resolve; such a crate should use `custom` there.);
+  - on `Option<Option<_>>`, also behind a pointer, is a compile error.
 
   `Box`, `Arc`, `Rc`, `Cow` and the container names are recognised by name,
   so a user type with one of those names should behave like the standard
