@@ -953,3 +953,35 @@ fn required_with_type_predicate_macros_and_self_containers() {
     assert_eq!(fields(&n.validate().unwrap_err()), ["name"]);
     let _ = n.tag;
 }
+
+/// The isolated check declares lifetimes a used one is bounded by, through
+/// where-clause chains (`'a: 'b, 'b: 'c` with only `'a` and `'c` in the type).
+#[test]
+fn required_isolated_check_follows_lifetime_chains() {
+    use std::marker::PhantomData;
+    struct P<'a, 'c>(&'a str, PhantomData<&'c ()>);
+    impl<'a: 'c, 'c> std::ops::Deref for P<'a, 'c> {
+        type Target = str;
+        fn deref(&self) -> &str {
+            self.0
+        }
+    }
+    #[derive(Validate)]
+    struct X<'a, 'b, 'c, T>
+    where
+        'a: 'b,
+        'b: 'c,
+    {
+        #[validate(required)]
+        f: Option<P<'a, 'c>>,
+        t: T,
+        _p: PhantomData<&'b ()>,
+    }
+    let x = X {
+        f: Some(P("", PhantomData)),
+        t: 0_u8,
+        _p: PhantomData,
+    };
+    assert_eq!(fields(&x.validate().unwrap_err()), ["f"]);
+    let _ = x.t;
+}
