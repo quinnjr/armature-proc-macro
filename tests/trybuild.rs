@@ -24,4 +24,5 @@ fn validate_derive_rejects_bad_attributes() {
     t.compile_fail("tests/ui/validate_length_bound_type.rs");
     t.compile_fail("tests/ui/validate_wrong_type.rs");
     t.compile_fail("tests/ui/validate_oversized_regex.rs");
+    t.compile_fail("tests/ui/validate_generic_required.rs");
 }

@@ -100,7 +100,9 @@ these fixes only once `armature-validation` depends on this release.
   and are skipped for `None`; `required` also rejects `None` (and checks
   emptiness only when the inner type is `AsRef<str>` — `String`, `Box<str>`,
   `Arc<str>`, `Cow<str>` and the like — so `required` on `Option<u32>` or
-  `Option<Uuid>` means "is `Some`"). `custom` validators still get
+  `Option<Uuid>` means "is `Some`"; on an `Option` of a type parameter it
+  requires `T: AsRef<str>`, since the type is not known when the derive
+  expands). `custom` validators still get
   the whole `&Option<T>`, as before, so they can act on `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).

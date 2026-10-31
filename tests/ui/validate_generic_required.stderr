@@ -1,0 +1,13 @@
+error[E0277]: the trait bound `T: AsRef<str>` is not satisfied
+ --> tests/ui/validate_generic_required.rs:5:10
+  |
+5 | #[derive(Validate)]
+  |          ^^^^^^^^ the trait `AsRef<str>` is not implemented for `T`
+6 | struct Named<T> {
+7 |     #[validate(required)]
+  |                -------- required by a bound introduced by this call
+  |
+help: consider restricting type parameter `T` with trait `AsRef`
+  |
+6 | struct Named<T: std::convert::AsRef<str>> {
+  |               ++++++++++++++++++++++++++

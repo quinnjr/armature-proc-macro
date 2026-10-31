@@ -101,6 +101,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut field_checks: Vec<TokenStream2> = Vec::new();
     let mut needs_not_empty_helpers = false;
+    let type_params: Vec<syn::Ident> = generics.type_params().map(|p| p.ident.clone()).collect();
 
     for field in fields {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -230,7 +231,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         let inner = option_inner(&field.ty);
         let required = checks.iter().any(|r| matches!(r.check, Check::Required));
-        needs_not_empty_helpers |= required && inner.is_some();
+        let optional = match inner {
+            None => Optional::No,
+            Some(inner) if mentions_type_param(inner, &type_params) => Optional::Generic,
+            Some(_) => Optional::Concrete,
+        };
+        needs_not_empty_helpers |= required && optional == Optional::Concrete;
         let access = quote! { self.#field_ident };
         let (whole, mut unwrapped): (Vec<Rule>, Vec<Rule>) = checks
             .into_iter()
@@ -242,7 +248,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let emit = |rules: Vec<Rule>| -> Vec<TokenStream2> {
             rules
                 .into_iter()
-                .map(|rule| emit_check(&krate, &locals, &field_name, rule, inner.is_some()))
+                .map(|rule| emit_check(&krate, &locals, &field_name, rule, optional))
                 .collect()
         };
         let (whole, body) = (emit(whole), emit(unwrapped));
@@ -564,6 +570,40 @@ fn anchored(pattern: &str) -> String {
     format!(r"\A(?:{pattern})\z")
 }
 
+/// Whether a field is an `Option`, and if so whether its inner type mentions
+/// one of the struct's type parameters.
+#[derive(Clone, Copy, PartialEq)]
+enum Optional {
+    No,
+    Concrete,
+    Generic,
+}
+
+/// Whether `ty` mentions any of `params` (the struct's type parameters).
+fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
+    struct Finder<'a> {
+        params: &'a [syn::Ident],
+        found: bool,
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            if path.leading_colon.is_none()
+                && let Some(first) = path.segments.first()
+                && self.params.contains(&first.ident)
+            {
+                self.found = true;
+            }
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let mut finder = Finder {
+        params,
+        found: false,
+    };
+    syn::visit::Visit::visit_type(&mut finder, ty);
+    finder.found
+}
+
 /// Helpers for `required` on an `Option<T>` field, emitted once at the top of
 /// `validate()` when needed. Autoref specialisation picks the emptiness check
 /// when `T: AsRef<str>` (`String`, `Box<str>`, `Arc<str>`, `Cow<str>`, …) and
@@ -601,7 +641,7 @@ fn emit_check(
     locals: &Locals,
     field_name: &str,
     rule: Rule,
-    optional: bool,
+    optional: Optional,
 ) -> TokenStream2 {
     let Rule { check, span } = rule;
     let Locals {
@@ -750,7 +790,15 @@ fn emit_check(
         // On an `Option` field (this branch runs for `Some`), emptiness is
         // checked only when the inner type is a string; see
         // `not_empty_helpers`.
-        Check::Required if optional => quote! {
+        // Autoref specialisation cannot see through a type parameter: inside
+        // the generic `validate()` it would always pick the "is `Some`"
+        // fallback, even for `S<String>`. So for an inner type that mentions
+        // one, require `AsRef<str>` outright; without that bound it fails to
+        // compile rather than silently skipping the emptiness check.
+        Check::Required if optional == Optional::Generic => push_builtin(quote_spanned! {span=>
+            #krate::NotEmpty::validate(::core::convert::AsRef::<str>::as_ref(#at_rule), #field_name)
+        }),
+        Check::Required if optional == Optional::Concrete => quote! {
             if let ::std::option::Option::Some(mut #error) =
                 (&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
             {

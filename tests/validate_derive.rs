@@ -488,3 +488,20 @@ fn required_on_optional_non_string_types_means_some() {
     assert!(some.validate().is_ok());
     let _ = some.id.map(|u| u.0);
 }
+
+/// A generic `Option<T>` field cannot be specialised on `T`, so `required`
+/// asks for `T: AsRef<str>` and checks emptiness for every instantiation.
+#[test]
+fn required_on_generic_optional_field_checks_emptiness() {
+    #[derive(Validate)]
+    struct Named<T: AsRef<str>> {
+        #[validate(required)]
+        name: Option<T>,
+    }
+    let empty: Named<String> = Named {
+        name: Some(String::new()),
+    };
+    assert_eq!(fields(&empty.validate().unwrap_err()), ["name"]);
+    assert!(Named { name: Some("x") }.validate().is_ok());
+    assert!(Named::<&str> { name: None }.validate().is_err());
+}
