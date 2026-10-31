@@ -18,4 +18,19 @@ struct Wrapped<T> {
     name: Option<Wrapper<T>>,
 }
 
+// A type macro nested in another type may hide the parameter: fail closed.
+macro_rules! id {
+    ($t:ty) => {
+        $t
+    };
+}
+
+struct N<T>(T);
+
+#[derive(Validate)]
+struct HiddenByMacro<T> {
+    #[validate(required)]
+    name: Option<N<id!(T)>>,
+}
+
 fn main() {}

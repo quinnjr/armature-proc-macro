@@ -628,3 +628,24 @@ fn required_on_optional_macro_type_in_concrete_struct() {
     assert!(M { f: Some(0) }.validate().is_ok());
     assert!(M { f: None }.validate().is_err());
 }
+
+/// A never-a-string container behind a pointer still means "is `Some`".
+#[test]
+fn required_on_generic_containers_behind_pointers() {
+    use std::sync::Arc;
+    #[derive(Validate)]
+    struct S<'a, T> {
+        #[validate(required)]
+        slice: Option<&'a [T]>,
+        #[validate(required)]
+        boxed: Option<Box<[T]>>,
+        #[validate(required)]
+        shared: Option<Arc<Vec<T>>>,
+    }
+    let s: S<'_, u8> = S {
+        slice: Some(&[]),
+        boxed: Some(Box::new([])),
+        shared: Some(Arc::new(Vec::new())),
+    };
+    assert!(s.validate().is_ok());
+}

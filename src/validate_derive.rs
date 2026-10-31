@@ -102,6 +102,14 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let mut field_checks: Vec<TokenStream2> = Vec::new();
     let mut needs_not_empty_helpers = false;
     let type_params: Vec<syn::Ident> = generics.type_params().map(|p| p.ident.clone()).collect();
+    // Type and const parameters: either can make a type's trait impls unknown
+    // inside the generic `validate()` (`C<N>` may be `AsRef<str>` for one `N`).
+    let generic_params: Vec<syn::Ident> = type_params
+        .iter()
+        .cloned()
+        .chain(generics.const_params().map(|p| p.ident.clone()))
+        .collect();
+    let mut needs_generic_helper = false;
 
     for field in fields {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -241,9 +249,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
         let optional = match inner {
             None => Optional::No,
-            Some(inner) => classify_optional(inner, &type_params),
+            Some(inner) => classify_optional(inner, &type_params, &generic_params),
         };
         needs_not_empty_helpers |= required && optional == Optional::Concrete;
+        needs_generic_helper |= required && matches!(optional, Optional::Generic(_));
         let access = quote! { self.#field_ident };
         let (whole, mut unwrapped): (Vec<Rule>, Vec<Rule>) = checks
             .into_iter()
@@ -315,11 +324,13 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
     let errors = &locals.errors;
     let helpers = needs_not_empty_helpers.then(|| not_empty_helpers(&krate));
+    let generic_helper = needs_generic_helper.then(generic_required_helper);
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #krate::Validate for #name #ty_generics #where_clause {
             fn validate(&self) -> ::std::result::Result<(), ::std::vec::Vec<#krate::ValidationError>> {
                 #helpers
+                #generic_helper
                 let mut #errors: ::std::vec::Vec<#krate::ValidationError> = ::std::vec::Vec::new();
                 #(#field_checks)*
                 if #errors.is_empty() {
@@ -605,14 +616,71 @@ enum Optional {
 ///   `AsRef<str>` — a compile error unless it is, rather than a silent
 ///   "is `Some`";
 /// - anything else: `Concrete`.
-fn classify_optional(ty: &Type, params: &[syn::Ident]) -> Optional {
-    if let Some(layers) = generic_string_core(ty, params) {
+fn classify_optional(
+    ty: &Type,
+    type_params: &[syn::Ident],
+    generic_params: &[syn::Ident],
+) -> Optional {
+    if let Some(layers) = generic_string_core(ty, type_params) {
         return Optional::Generic(layers);
     }
-    if !mentions_type_param(ty, params) || never_a_string(ty) {
+    if !mentions_type_param(ty, generic_params) || never_a_string(peel_pointers(ty)) {
         return Optional::Concrete;
     }
     Optional::Generic(0)
+}
+
+/// `ty` without its outer `&`/`Box`/`Arc`/`Rc`/`Cow` layers, so a container
+/// behind a pointer (`&[T]`, `Box<[T]>`, `Arc<Vec<T>>`) is still recognised.
+fn peel_pointers(ty: &Type) -> &Type {
+    match ty {
+        Type::Group(g) => peel_pointers(&g.elem),
+        Type::Paren(p) => peel_pointers(&p.elem),
+        Type::Reference(r) => peel_pointers(&r.elem),
+        Type::Path(p) if p.qself.is_none() => {
+            let Some(last) = p.path.segments.last() else {
+                return ty;
+            };
+            if !matches!(
+                last.ident.to_string().as_str(),
+                "Box" | "Arc" | "Rc" | "Cow"
+            ) {
+                return ty;
+            }
+            let PathArguments::AngleBracketed(args) = &last.arguments else {
+                return ty;
+            };
+            let mut types = args.args.iter().filter_map(|a| match a {
+                GenericArgument::Type(t) => Some(t),
+                _ => None,
+            });
+            match (types.next(), types.next()) {
+                (Some(inner), None) => peel_pointers(inner),
+                _ => ty,
+            }
+        }
+        _ => ty,
+    }
+}
+
+/// The trait the generic `required` branch calls through, so a missing
+/// `AsRef<str>` is reported with a message naming the rule and the way out.
+fn generic_required_helper() -> TokenStream2 {
+    quote! {
+        #[diagnostic::on_unimplemented(
+            message = "`#[validate(required)]` on an `Option` of `{Self}` needs `{Self}: AsRef<str>`",
+            label = "the derive cannot tell whether this generic type is a string",
+            note = "bound the type parameter by `AsRef<str>`, or use `custom` for a presence-only check"
+        )]
+        trait __ArmatureRequiredStr {
+            fn __armature_str(&self) -> &str;
+        }
+        impl<T: ?::core::marker::Sized + ::core::convert::AsRef<str>> __ArmatureRequiredStr for T {
+            fn __armature_str(&self) -> &str {
+                self.as_ref()
+            }
+        }
+    }
 }
 
 /// Layers of `&`/`Box`/`Arc`/`Rc`/`Cow` over a type-parameter core, if any.
@@ -691,6 +759,13 @@ fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
         found: bool,
     }
     impl<'ast> syn::visit::Visit<'ast> for Finder<'_> {
+        // A macro's tokens are opaque, so in a generic struct assume it may
+        // name a parameter (failing closed) rather than that it does not.
+        fn visit_macro(&mut self, _: &'ast syn::Macro) {
+            if !self.params.is_empty() {
+                self.found = true;
+            }
+        }
         fn visit_path(&mut self, path: &'ast syn::Path) {
             if path.leading_colon.is_none()
                 && let Some(first) = path.segments.first()
@@ -950,7 +1025,7 @@ fn emit_check(
                 inner = quote! { &**(#inner) };
             }
             push_builtin(quote_spanned! {span=>
-                #krate::NotEmpty::validate(::core::convert::AsRef::<str>::as_ref(#inner), #field_name)
+                #krate::NotEmpty::validate(__ArmatureRequiredStr::__armature_str(#inner), #field_name)
             })
         }
         // On an `Option` field (this branch runs for `Some`), the emptiness
