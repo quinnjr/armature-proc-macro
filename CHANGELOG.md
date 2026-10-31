@@ -133,14 +133,19 @@ these fixes only once `armature-validation` depends on this release.
   - on `Option<Option<_>>`, also behind `&`/`Box`/`Arc`/`Rc`/`Cow`/`Pin`,
     is a compile error.
 
-  `Box`, `Arc`, `Rc`, `Cow` and the container names (the latter only bare
-  or under `std`/`alloc`/`core`) are recognised by name,
+  `Box`, `Arc`, `Rc`, `Cow` and the container names are recognised by name,
+  and only when written bare or under `std`/`alloc`/`core` (so
+  `io::Result<T>` in a generic struct needs `std::io::Result<T>` or
+  `custom`; a crate shadowing `std` itself is not supported). Where
+  `required` is then checked in place through such pointers, the generated
+  code asserts that they dereference to the type underneath, so a
+  look-alike pointer in scope fails to compile rather than skip the check;
   so a user type with one of those names should behave like the standard
   one (a user `Box<T>` without `Deref` fails to compile with "cannot be
-  dereferenced"). In particular, a user type named like a container that
-  derefs to a string, inside a generic struct whose where-clause bounds it
-  without naming `Target`, gets only the `Some` check: the derive cannot
-  isolate a type that mentions a type parameter.
+  dereferenced"). In particular, a user type in scope under a container's
+  bare name that derefs to a string only for some arguments or only under a
+  where-clause, used with a type parameter, gets only the `Some` check: the
+  derive cannot isolate a type that mentions a type parameter.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator

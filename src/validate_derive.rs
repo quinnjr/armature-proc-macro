@@ -366,8 +366,26 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     }
                 }
             });
+            // When `required` is checked in place on a type reached through
+            // pointer layers the derive unwrapped by name, prove those layers
+            // really lead to the type underneath: a look-alike `Box`/`Rc` in
+            // scope, or a where-clause hiding a real one's `Target`, then
+            // fails to compile instead of letting specialisation fall back to
+            // "is `Some`".
+            let layers_proof = (required && optional == Optional::Concrete && isolated.is_none())
+                .then(|| inner.map(peel_pointers))
+                .flatten()
+                .filter(|(_, layers)| *layers > 0)
+                .map(|(core, layers)| {
+                    let mut derefed = quote! { #value };
+                    for _ in 0..layers {
+                        derefed = quote! { &**(#derefed) };
+                    }
+                    quote! { let _: &#core = #derefed; }
+                });
             quote! {
                 if let ::std::option::Option::Some(#value) = &#access {
+                    #layers_proof
                     #body
                 } #missing
             }
@@ -711,10 +729,7 @@ fn peel_pointers(ty: &Type) -> (&Type, usize) {
             let Some(last) = p.path.segments.last() else {
                 return (ty, 0);
             };
-            if !matches!(
-                last.ident.to_string().as_str(),
-                "Box" | "Arc" | "Rc" | "Cow"
-            ) {
+            if !is_std_pointer(&p.path) {
                 return (ty, 0);
             }
             let PathArguments::AngleBracketed(args) = &last.arguments else {
@@ -790,10 +805,7 @@ fn generic_string_core(ty: &Type, params: &[syn::Ident]) -> Option<usize> {
                 return Some(0);
             }
             let last = p.path.segments.last()?;
-            if !matches!(
-                last.ident.to_string().as_str(),
-                "Box" | "Arc" | "Rc" | "Cow"
-            ) {
+            if !is_std_pointer(&p.path) {
                 return None;
             }
             let PathArguments::AngleBracketed(args) = &last.arguments else {
@@ -818,6 +830,27 @@ fn generic_string_core(ty: &Type, params: &[syn::Ident]) -> Option<usize> {
     }
 }
 
+/// Whether `path` names `Box`, `Arc`, `Rc` or `Cow`, written bare or under
+/// `std`/`alloc`/`core`. Through any other module it may be a look-alike
+/// whose `Deref` a where-clause could hide, so it is not unwrapped.
+fn is_std_pointer(path: &syn::Path) -> bool {
+    std_path(path)
+        && path
+            .segments
+            .last()
+            .is_some_and(|s| matches!(s.ident.to_string().as_str(), "Box" | "Arc" | "Rc" | "Cow"))
+}
+
+/// A path written bare (one segment) or starting with `std`, `alloc` or
+/// `core`.
+fn std_path(path: &syn::Path) -> bool {
+    path.segments.len() == 1
+        || path
+            .segments
+            .first()
+            .is_some_and(|s| matches!(s.ident.to_string().as_str(), "std" | "alloc" | "core"))
+}
+
 /// Containers that are never a string whatever their parameters.
 fn never_a_string(ty: &Type) -> bool {
     match ty {
@@ -827,13 +860,7 @@ fn never_a_string(ty: &Type) -> bool {
         // Written bare or under `std`/`alloc`/`core` only: a path through some
         // other module (`m::Vec<T>`) may be a look-alike that derefs to a
         // string, and a where-clause could then hide that from the check.
-        Type::Path(p)
-            if p.qself.is_none()
-                && (p.path.segments.len() == 1
-                    || p.path.segments.first().is_some_and(|s| {
-                        matches!(s.ident.to_string().as_str(), "std" | "alloc" | "core")
-                    })) =>
-        {
+        Type::Path(p) if p.qself.is_none() && std_path(&p.path) => {
             p.path.segments.last().is_some_and(|s| {
                 matches!(
                     s.ident.to_string().as_str(),
