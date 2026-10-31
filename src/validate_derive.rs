@@ -845,7 +845,6 @@ fn nested_lifetimes(generics: &syn::Generics, ty: &Type) -> TokenStream2 {
     }
     let mut used = Used(Vec::new());
     syn::visit::Visit::visit_type(&mut used, ty);
-    let keep = |b: &syn::Lifetime| b.ident == "static" || used.0.contains(&b.ident);
     // Outlives bounds written in the where-clause, by lifetime.
     let where_bounds: Vec<&syn::PredicateLifetime> = generics
         .where_clause
@@ -856,6 +855,34 @@ fn nested_lifetimes(generics: &syn::Generics, ty: &Type) -> TokenStream2 {
             _ => None,
         })
         .collect();
+    // Close the set over outlives bounds, so a used lifetime keeps the
+    // lifetimes it is bounded by (`'a: 'b, 'b: 'static`).
+    loop {
+        let before = used.0.len();
+        let bounds_of = |lt: &syn::Ident| -> Vec<syn::Ident> {
+            generics
+                .lifetimes()
+                .filter(|p| p.lifetime.ident == *lt)
+                .flat_map(|p| p.bounds.iter().map(|b| b.ident.clone()))
+                .chain(
+                    where_bounds
+                        .iter()
+                        .filter(|w| w.lifetime.ident == *lt)
+                        .flat_map(|w| w.bounds.iter().map(|b| b.ident.clone())),
+                )
+                .collect()
+        };
+        let extra: Vec<syn::Ident> = used.0.iter().flat_map(bounds_of).collect();
+        for lt in extra {
+            if lt != "static" && !used.0.contains(&lt) {
+                used.0.push(lt);
+            }
+        }
+        if used.0.len() == before {
+            break;
+        }
+    }
+    let keep = |b: &syn::Lifetime| b.ident == "static" || used.0.contains(&b.ident);
     let params: Vec<syn::LifetimeParam> = generics
         .lifetimes()
         .filter(|p| used.0.contains(&p.lifetime.ident))

@@ -116,7 +116,8 @@ these fixes only once `armature-validation` depends on this release.
     In a struct with type or const parameters or a where-clause type
     predicate, a concrete inner type that mentions no type or const
     parameter is checked in a nested function that declares only the
-    lifetimes it uses (with their outlives bounds), so the struct's type
+    lifetimes it uses (with their outlives bounds, followed transitively,
+    `'static` included), so the struct's type
     parameters and where-clauses cannot change which check applies; in such
     a struct without type parameters, an inner type naming `Self` or using a
     type macro must be `AsRef<str>`. `Pin<..>` and type aliases are not

@@ -871,3 +871,55 @@ fn required_with_where_type_predicates_and_no_type_params() {
     };
     assert_eq!(fields(&n.validate().unwrap_err()), ["a"]);
 }
+
+/// The reviewer's shapes: a lifetime-only struct whose where-clause bounds
+/// a lifetime-carrying wrapper, and a `'static`-bounded lifetime in a
+/// generic struct.
+#[test]
+fn required_where_clause_and_static_bound_shapes() {
+    use std::sync::Arc;
+    struct Wrapper<'a>(&'a str);
+    impl std::ops::Deref for Wrapper<'_> {
+        type Target = str;
+        fn deref(&self) -> &str {
+            self.0
+        }
+    }
+    #[derive(Validate)]
+    struct S<'a>
+    where
+        Wrapper<'a>: std::ops::Deref,
+    {
+        #[validate(required)]
+        w: Option<Wrapper<'a>>,
+        #[validate(required)]
+        a: Option<Arc<Wrapper<'a>>>,
+        #[validate(required)]
+        b: Option<Box<Wrapper<'a>>>,
+    }
+    let s = S {
+        w: Some(Wrapper("")),
+        a: Some(Arc::new(Wrapper(""))),
+        b: Some(Box::new(Wrapper(""))),
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["w", "a", "b"]);
+
+    struct F<'a>(&'a str);
+    impl AsRef<str> for F<'static> {
+        fn as_ref(&self) -> &str {
+            self.0
+        }
+    }
+    #[derive(Validate)]
+    struct G<'a: 'static, T> {
+        #[validate(required)]
+        f: Option<F<'a>>,
+        t: T,
+    }
+    let g = G {
+        f: Some(F("")),
+        t: 0_u8,
+    };
+    assert_eq!(fields(&g.validate().unwrap_err()), ["f"]);
+    let _ = g.t;
+}
