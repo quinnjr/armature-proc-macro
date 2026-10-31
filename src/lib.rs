@@ -235,13 +235,27 @@ pub fn query_derive(input: TokenStream) -> TokenStream {
 /// validators do not all cover:
 ///
 /// - `length(min = N, max = M)` — string length bounds (character count)
-/// - `range(min = N, max = M)` — numeric range bounds (emitted inline)
+/// - `range(min = N, max = M)` — numeric range bounds (emitted inline). An
+///   unordered value (a float NaN) fails either bound; the submitted value is
+///   not attached to the error
 /// - `email` / `url` — format validators
-/// - `regex(pattern = "...")` — pattern match
-/// - `required` — non-empty string
-/// - `custom = "path::to::fn"` — a `fn(&Field) -> Result<(), ValidationError>`
+/// - `regex(pattern = "...")` — pattern match anywhere in the value (anchor
+///   with `^…$` for a full match). The pattern is checked when the derive
+///   expands, so a bad pattern is a compile error, and compiled once on first
+///   use rather than per `validate()` call
+/// - `required` — has visible content
+/// - `custom = "path::to::fn"` — a `fn(&Field) -> Result<(), ValidationError>`;
+///   an error whose `field` is empty is attributed to this field
+/// - `custom_with_field = "path::to::fn"` — the same, but the function is also
+///   passed the field name: `fn(&Field, &str) -> Result<(), ValidationError>`
 /// - a bare `#[validate]` (or `#[validate(nested)]`) recurses into a nested
-///   field that also implements `Validate`
+///   field that also implements `Validate`; its errors' fields are prefixed
+///   with this field's name (`address.city`)
+///
+/// The generated code reaches `armature-validation` through the deriving
+/// crate's own dependency on it, under whatever name it was given, or the
+/// `armature` facade's re-export. Override with a struct-level
+/// `#[validate(crate = "path::to::armature_validation")]`.
 ///
 /// ```ignore
 /// use armature_validation::Validate;

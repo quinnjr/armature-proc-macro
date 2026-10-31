@@ -9,6 +9,45 @@ Earlier changes are recorded in the workspace [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
+Breaking: the next release is 0.7.0 (`#[derive(Validate)]` reports nested
+errors under a new field path and rejects invalid regex patterns at compile
+time).
+
+### Security
+
+- **`#[derive(Validate)]` `range` with only `min` or only `max` rejects NaN.**
+  It emitted `__v < min` / `__v > max`, both false for NaN, so
+  `#[validate(range(min = 0.0))]` accepted `f64::NAN` (and `"NaN".parse()` is
+  how a query or form value becomes one). Bounds are now checked through
+  `PartialOrd::partial_cmp`, failing an unordered value.
+- **`range` errors no longer carry the submitted value.** The derive attached
+  it with `with_value`; validation errors are sent to clients.
+- **`regex` patterns are compiled once per field instead of on every
+  `validate()` call.** Recompiling per request cost milliseconds of CPU for
+  Unicode patterns such as `[\w.-]{3,32}` on every request to the endpoint.
+
+### Changed
+
+- **Breaking:** a `regex` pattern that does not parse is a compile error at
+  the pattern, not a 400 on every request carrying the regex error text.
+- **Breaking:** errors from a nested `#[validate]` field are prefixed with the
+  parent field's name (`billing.city`), so two fields of the same type report
+  distinct paths.
+- An error returned by a `custom` validator with an empty `field` is
+  attributed to the annotated field.
+- The generated code finds `armature-validation` through the deriving crate's
+  manifest (a renamed dependency, or the `armature` facade's re-export)
+  instead of assuming `::armature_validation`.
+
+### Added
+
+- `custom_with_field = "fn"`, which passes the field name to the validator
+  (`fn(&Field, &str)`), so one function can serve several fields.
+- Struct-level `#[validate(crate = "path")]` to name the path to
+  `armature-validation` explicitly.
+- Dependencies: `proc-macro-crate` (crate-path resolution) and `regex-syntax`
+  (compile-time pattern check).
+
 ## [0.6.0] - 2026-10-29
 
 ### Changed
