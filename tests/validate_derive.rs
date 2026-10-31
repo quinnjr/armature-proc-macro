@@ -781,3 +781,46 @@ fn required_isolated_check_keeps_lifetimes() {
         ["text", "nested", "parent"]
     );
 }
+
+/// Type macros naming the struct's lifetimes or `Self` work in structs
+/// without type parameters, and an isolated check declares only the
+/// lifetimes its type uses (strict crates deny `unused_lifetimes`).
+#[test]
+#[deny(unused_lifetimes, single_use_lifetimes)]
+fn required_with_macro_types_and_partial_lifetimes() {
+    macro_rules! borrowed {
+        ($l:lifetime) => {
+            &$l str
+        };
+    }
+    macro_rules! boxed_self {
+        () => {
+            Box<Self>
+        };
+    }
+    #[derive(Validate)]
+    struct M<'a> {
+        #[validate(required)]
+        b: Option<borrowed!('a)>,
+        #[validate(required)]
+        p: Option<boxed_self!()>,
+    }
+    let m = M {
+        b: Some(""),
+        p: None,
+    };
+    assert_eq!(fields(&m.validate().unwrap_err()), ["b", "p"]);
+
+    #[derive(Validate)]
+    struct G<'a, 'b, T> {
+        #[validate(required)]
+        name: Option<&'a str>,
+        other: &'b T,
+    }
+    let g = G {
+        name: Some(""),
+        other: &0_u8,
+    };
+    assert_eq!(fields(&g.validate().unwrap_err()), ["name"]);
+    let _ = g.other;
+}

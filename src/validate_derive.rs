@@ -266,11 +266,19 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // generics nor its where-clauses, so specialisation there sees the
         // type's real impls (a `where Foo: Deref<Target = T>` cannot steer
         // it), whatever path or alias the type is written with.
+        // Only a struct with type or const parameters needs this: without
+        // them a where-clause can only restate the real impls, so the check
+        // in place is already exact (and a type macro or `Self` there, which
+        // a nested fn could not name, is no problem). In a generic struct a
+        // macro or `Self` counts as generic and never reaches here.
         let isolated = (optional == Optional::Concrete
+            && !generic_params.is_empty()
             && inner.is_some_and(|i| !mentions_type_param(i, &generic_params)))
-        .then(|| inner.map(|i| isolate_type(i, name, generics)))
+        .then_some(inner)
         .flatten();
-        let nested = nested_lifetimes(generics);
+        let nested = isolated
+            .map(|ty| nested_lifetimes(generics, ty))
+            .unwrap_or_default();
         let emit = |rules: Vec<Rule>| -> Vec<TokenStream2> {
             rules
                 .into_iter()
@@ -281,7 +289,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         &field_name,
                         rule,
                         optional,
-                        isolated.as_ref().map(|ty| (ty, &nested)),
+                        isolated.map(|ty| (ty, &nested)),
                     )
                 })
                 .collect()
@@ -802,54 +810,34 @@ fn never_a_string(ty: &Type) -> bool {
     }
 }
 
-/// `ty` made valid as the nested fn's parameter type: `Self`, which a nested
-/// item cannot name, becomes the struct's name with its lifetime arguments
-/// (only structs without type or const parameters reach here). Lifetimes
-/// are kept as written: the nested fn declares the struct's lifetime
-/// parameters (see `nested_lifetimes`), and lifetimes cannot steer trait
-/// selection.
-fn isolate_type(ty: &Type, name: &syn::Ident, generics: &syn::Generics) -> Type {
-    struct Isolate<'a> {
-        name: &'a syn::Ident,
-        lifetimes: Vec<syn::Lifetime>,
-    }
-    impl syn::visit_mut::VisitMut for Isolate<'_> {
-        fn visit_path_mut(&mut self, path: &mut syn::Path) {
-            if path.leading_colon.is_none()
-                && let Some(first) = path.segments.first_mut()
-                && first.ident == "Self"
-            {
-                first.ident = self.name.clone();
-                if !self.lifetimes.is_empty() {
-                    let lifetimes = &self.lifetimes;
-                    first.arguments = PathArguments::AngleBracketed(syn::parse_quote! {
-                        <#(#lifetimes),*>
-                    });
-                }
-            }
-            syn::visit_mut::visit_path_mut(self, path);
+/// The struct's lifetime parameters that `ty` mentions, with their outlives
+/// bounds, for the nested fn's signature (only those, so strict crates'
+/// `unused_lifetimes` stays quiet). Only lifetimes: copying type parameters
+/// or where predicates would bring back exactly what the nesting is there to
+/// avoid. A bound naming a lifetime the type does not mention is dropped
+/// with it; outlives bounds cannot change which impl applies.
+fn nested_lifetimes(generics: &syn::Generics, ty: &Type) -> TokenStream2 {
+    struct Used(Vec<syn::Ident>);
+    impl<'ast> syn::visit::Visit<'ast> for Used {
+        fn visit_lifetime(&mut self, lt: &'ast syn::Lifetime) {
+            self.0.push(lt.ident.clone());
         }
     }
-    let mut ty = ty.clone();
-    syn::visit_mut::VisitMut::visit_type_mut(
-        &mut Isolate {
-            name,
-            lifetimes: generics.lifetimes().map(|l| l.lifetime.clone()).collect(),
-        },
-        &mut ty,
-    );
-    ty
-}
-
-/// The struct's lifetime parameters, with their outlives bounds, for the
-/// nested fn's signature. Only lifetimes: copying type parameters or where
-/// predicates would bring back exactly what the nesting is there to avoid.
-fn nested_lifetimes(generics: &syn::Generics) -> TokenStream2 {
+    let mut used = Used(Vec::new());
+    syn::visit::Visit::visit_type(&mut used, ty);
     let params: Vec<syn::LifetimeParam> = generics
         .lifetimes()
+        .filter(|p| used.0.contains(&p.lifetime.ident))
         .map(|p| {
             let mut p = p.clone();
             p.attrs.clear();
+            p.bounds = p
+                .bounds
+                .iter()
+                .filter(|b| used.0.contains(&b.ident))
+                .cloned()
+                .collect();
+            p.colon_token = (!p.bounds.is_empty()).then(Default::default);
             p
         })
         .collect();
