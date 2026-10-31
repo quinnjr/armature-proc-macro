@@ -6,7 +6,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{ToTokens, format_ident, quote, quote_spanned};
+use quote::{format_ident, quote, quote_spanned};
 use syn::{
     Data, DeriveInput, Expr, Fields, GenericArgument, LitInt, LitStr, Path, PathArguments, Type,
     ext::IdentExt, parse_macro_input, spanned::Spanned,
@@ -110,18 +110,6 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .chain(generics.const_params().map(|p| p.ident.clone()))
         .collect();
     let mut needs_generic_helper = false;
-    // Types a where-clause bounds: their trait impls inside the generic
-    // `validate()` follow the clause (`where Foo: Deref<Target = T>`), so
-    // specialisation must not be trusted for them either.
-    let where_bounded: Vec<String> = generics
-        .where_clause
-        .iter()
-        .flat_map(|w| &w.predicates)
-        .filter_map(|p| match p {
-            syn::WherePredicate::Type(t) => Some(t.bounded_ty.to_token_stream().to_string()),
-            _ => None,
-        })
-        .collect();
 
     for field in fields {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -261,16 +249,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
         let optional = match inner {
             None => Optional::No,
-            Some(inner) => {
-                let (core, layers) = peel_pointers(inner);
-                if where_bounded.contains(&core.to_token_stream().to_string())
-                    || where_bounded.contains(&inner.to_token_stream().to_string())
-                {
-                    Optional::Generic(layers)
-                } else {
-                    classify_optional(inner, &type_params, &generic_params)
-                }
-            }
+            Some(inner) => classify_optional(inner, &type_params, &generic_params),
         };
         needs_not_empty_helpers |= required && optional == Optional::Concrete;
         needs_generic_helper |= required && matches!(optional, Optional::Generic(_));
@@ -282,10 +261,28 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // `email`, `url` and `regex`.
         unwrapped.sort_by_key(|r| !matches!(r.check, Check::Length { .. }));
         let unwrapped_empty = unwrapped.is_empty();
+        // A concrete inner type that mentions no parameter is checked inside
+        // a nested, non-generic fn: nested items inherit neither the struct's
+        // generics nor its where-clauses, so specialisation there sees the
+        // type's real impls (a `where Foo: Deref<Target = T>` cannot steer
+        // it), whatever path or alias the type is written with.
+        let isolated = (optional == Optional::Concrete
+            && inner.is_some_and(|i| !mentions_type_param(i, &generic_params)))
+        .then(|| inner.map(|i| isolate_type(i, name, generics.params.is_empty())))
+        .flatten();
         let emit = |rules: Vec<Rule>| -> Vec<TokenStream2> {
             rules
                 .into_iter()
-                .map(|rule| emit_check(&krate, &locals, &field_name, rule, optional))
+                .map(|rule| {
+                    emit_check(
+                        &krate,
+                        &locals,
+                        &field_name,
+                        rule,
+                        optional,
+                        isolated.as_ref(),
+                    )
+                })
                 .collect()
         };
         let (whole, body) = (emit(whole), emit(unwrapped));
@@ -804,6 +801,37 @@ fn never_a_string(ty: &Type) -> bool {
     }
 }
 
+/// `ty` made valid as a nested fn's parameter type: lifetimes become `'_`
+/// (the struct's lifetimes are not in scope there; `'static` is kept), and
+/// `Self` becomes the struct's name, which only a non-generic struct reaches
+/// here.
+fn isolate_type(ty: &Type, name: &syn::Ident, non_generic: bool) -> Type {
+    struct Isolate<'a> {
+        name: &'a syn::Ident,
+        non_generic: bool,
+    }
+    impl syn::visit_mut::VisitMut for Isolate<'_> {
+        fn visit_lifetime_mut(&mut self, lt: &mut syn::Lifetime) {
+            if lt.ident != "static" {
+                *lt = syn::Lifetime::new("'_", lt.span());
+            }
+        }
+        fn visit_path_mut(&mut self, path: &mut syn::Path) {
+            if self.non_generic
+                && path.leading_colon.is_none()
+                && let Some(first) = path.segments.first_mut()
+                && first.ident == "Self"
+            {
+                first.ident = self.name.clone();
+            }
+            syn::visit_mut::visit_path_mut(self, path);
+        }
+    }
+    let mut ty = ty.clone();
+    syn::visit_mut::VisitMut::visit_type_mut(&mut Isolate { name, non_generic }, &mut ty);
+    ty
+}
+
 /// Whether `ty` mentions any of `params` (the struct's type parameters).
 fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
     struct Finder<'a> {
@@ -872,6 +900,12 @@ fn not_empty_helpers(krate: &TokenStream2) -> TokenStream2 {
     let level3 = check(quote! { &****self.0 });
     quote! {
         struct __ArmatureNotEmpty<'a, T: #sized>(&'a T);
+        impl<T: #sized> ::core::clone::Clone for __ArmatureNotEmpty<'_, T> {
+            fn clone(&self) -> Self {
+                *self
+            }
+        }
+        impl<T: #sized> ::core::marker::Copy for __ArmatureNotEmpty<'_, T> {}
         trait __ArmatureNotEmpty0 { fn __armature_check(&self, field: &str) -> #ret; }
         trait __ArmatureNotEmpty1 { fn __armature_check(&self, field: &str) -> #ret; }
         trait __ArmatureNotEmpty2 { fn __armature_check(&self, field: &str) -> #ret; }
@@ -918,6 +952,7 @@ fn emit_check(
     field_name: &str,
     rule: Rule,
     optional: Optional,
+    isolated: Option<&Type>,
 ) -> TokenStream2 {
     let Rule { check, span } = rule;
     let Locals {
@@ -1084,14 +1119,33 @@ fn emit_check(
         }
         // On an `Option` field (this branch runs for `Some`), the emptiness
         // check is chosen by the inner type; see `not_empty_helpers`.
-        Check::Required if optional == Optional::Concrete => quote! {
-            if let ::std::option::Option::Some(mut #error) =
-                (&&&&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
-            {
-                #error.value = ::std::option::Option::None;
-                #errors.push(#error);
+        Check::Required if optional == Optional::Concrete => {
+            let check = match isolated {
+                Some(ty) => quote! {
+                    {
+                        // The value arrives wrapped (and `Copy`), so the
+                        // signature names no `&Cow<..>`-style parameter for
+                        // user lints such as `clippy::ptr_arg` to flag.
+                        fn __armature_required(
+                            value: __ArmatureNotEmpty<'_, #ty>,
+                            field: &str,
+                        ) -> ::std::option::Option<#krate::ValidationError> {
+                            (&&&&value).__armature_check(field)
+                        }
+                        __armature_required(__ArmatureNotEmpty(#value), #field_name)
+                    }
+                },
+                // A never-a-string container that mentions a parameter
+                // (`Vec<T>`): specialisation can only reach the fallback.
+                None => quote! { (&&&&__ArmatureNotEmpty(#value)).__armature_check(#field_name) },
+            };
+            quote! {
+                if let ::std::option::Option::Some(mut #error) = #check {
+                    #error.value = ::std::option::Option::None;
+                    #errors.push(#error);
+                }
             }
-        },
+        }
         Check::Required => {
             push_builtin(quote_spanned! {span=> #krate::NotEmpty::validate(#at_rule, #field_name) })
         }

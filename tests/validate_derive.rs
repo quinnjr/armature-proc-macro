@@ -673,8 +673,9 @@ fn required_on_boxed_generic_string_wrapper() {
     assert_eq!(fields(&s.validate().unwrap_err()), ["f"]);
 }
 
-/// A where-clause can change a concrete type's impls inside the generic
-/// `validate()`; such a field is checked as generic, not specialised.
+/// A where-clause cannot steer the check on a concrete type: `required` on
+/// it is decided outside the struct's generics. `Foo` only derefs to a
+/// string (no `AsRef<str>`), so the where-clause would otherwise hide it.
 #[test]
 fn required_on_where_bounded_concrete_type() {
     struct Foo(String);
@@ -684,21 +685,70 @@ fn required_on_where_bounded_concrete_type() {
             &self.0
         }
     }
-    impl AsRef<str> for Foo {
-        fn as_ref(&self) -> &str {
-            &self.0
-        }
-    }
+    type Alias = Foo;
     #[derive(Validate)]
     struct S<T>
     where
-        Foo: std::ops::Deref<Target = T>,
+        Alias: std::ops::Deref<Target = T>,
     {
         #[validate(required)]
         a: Option<Foo>,
+        #[validate(required)]
+        b: Option<&'static Alias>,
     }
     let s: S<String> = S {
         a: Some(Foo(String::new())),
+        b: Some(Box::leak(Box::new(Foo(String::new())))),
     };
-    assert_eq!(fields(&s.validate().unwrap_err()), ["a"]);
+    assert_eq!(fields(&s.validate().unwrap_err()), ["a", "b"]);
+}
+
+/// A where-clause on a container or an unrelated type does not change how
+/// `required` treats it.
+#[test]
+fn required_with_unrelated_where_clauses() {
+    #[derive(Validate)]
+    struct S<T: std::fmt::Debug>
+    where
+        Vec<T>: std::fmt::Debug,
+        u32: Clone,
+    {
+        #[validate(required)]
+        many: Option<Vec<T>>,
+        #[validate(required)]
+        n: Option<u32>,
+        #[validate(required)]
+        name: Option<String>,
+    }
+    let s: S<u8> = S {
+        many: Some(Vec::new()),
+        n: Some(0),
+        name: Some("x".into()),
+    };
+    assert!(s.validate().is_ok());
+}
+
+/// Lifetimes in a concrete inner type are fine in the isolated check, and
+/// `Self` in a non-generic struct works.
+#[test]
+fn required_isolated_check_handles_lifetimes_and_self() {
+    use std::borrow::Cow;
+    #[derive(Validate)]
+    struct S<'a> {
+        #[validate(required)]
+        name: Option<Cow<'a, str>>,
+        #[validate(required)]
+        tag: Option<&'a str>,
+    }
+    let s = S {
+        name: Some(Cow::Borrowed("")),
+        tag: Some(""),
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["name", "tag"]);
+    #[derive(Validate)]
+    struct Node {
+        #[validate(required)]
+        parent: Option<Box<Self>>,
+    }
+    assert!(Node { parent: None }.validate().is_err());
 }
