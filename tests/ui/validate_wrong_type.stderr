@@ -18,3 +18,40 @@ note: associated function defined here
   |     pub fn validate(value: &str, field: &str) -> Result<(), ValidationError> {
   |            ^^^^^^^^
   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: can't compare `String` with `{integer}`
+ --> tests/ui/validate_wrong_type.rs:4:10
+  |
+4 | #[derive(Validate)]
+  |          ^^^^^^^^ no implementation for `String < {integer}` and `String > {integer}`
+...
+8 |     #[validate(range(min = 1))]
+  |                ----- required by a bound introduced by this call
+  |
+  = help: the trait `PartialOrd<{integer}>` is not implemented for `String`
+  = help: `String` implements trait `PartialOrd<Rhs>`:
+            PartialOrd<bytes::bytes::Bytes>
+            PartialOrd<bytes::bytes_mut::BytesMut>
+            PartialOrd<http::header::value::HeaderValue>
+            PartialOrd<http::uri::authority::Authority>
+            PartialOrd<http::uri::path::PathAndQuery>
+            PartialOrd
+
+error[E0277]: the trait bound `u32: Validate` is not satisfied
+  --> tests/ui/validate_wrong_type.rs:10:5
+   |
+ 4 | #[derive(Validate)]
+   |          --------
+   |          |
+   |          required by a bound introduced by this call
+   |          in this derive macro expansion
+...
+10 |     #[validate]
+   |     ^ the trait `Validate` is not implemented for `u32`
+   |
+help: the trait `Validate` is implemented for `WrongType`
+  --> tests/ui/validate_wrong_type.rs:4:10
+   |
+ 4 | #[derive(Validate)]
+   |          ^^^^^^^^
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)

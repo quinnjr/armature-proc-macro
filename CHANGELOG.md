@@ -70,8 +70,12 @@ these fixes only once `armature-validation` depends on this release.
   fields and bounds such as `min = self.other` work, and evaluates each bound
   expression once. A one-sided float bound admits infinity (`range(min =
   0.01)` accepts `inf`); give both bounds to exclude it.
-- A type error from a rule (`email` on a `u32`) points at the rule, not at
-  `#[derive(Validate)]`.
+- A type error from a `length`, `email`, `url`, `regex`, `required`,
+  `custom` or nested rule (`email` on a `u32`) points at the rule, not at
+  `#[derive(Validate)]`. A `range` comparison error still points at the
+  derive.
+- Error order within a field changed: `custom` errors come first, then
+  `length`, then the other rules in the order written.
 - An error returned by a `custom` validator with an empty `field` is
   attributed to the annotated field; the error type is fixed to
   `ValidationError`, so a validator generic over its error type still infers.
@@ -92,8 +96,9 @@ these fixes only once `armature-validation` depends on this release.
 
 - `Option<T>` fields (detected syntactically; a type alias is not seen
   through): built-in rules and `nested` apply to the value when it is `Some`
-  and are skipped for `None`; `required` also rejects `None` (and on a
-  non-string `Option` means only "is `Some`"). `custom` validators still get
+  and are skipped for `None`; `required` also rejects `None` (and on an
+  `Option` of a number, `bool` or `char` means only "is `Some`"; any other
+  inner type keeps the emptiness check). `custom` validators still get
   the whole `&Option<T>`, as before, so they can act on `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).

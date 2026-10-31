@@ -486,3 +486,26 @@ fn oversized_values_skip_scanning_rules_and_custom_values_are_cleared() {
     assert_eq!(fields(&errors), ["a", "b"]);
     assert!(errors.iter().all(|e| e.value.is_none()));
 }
+
+/// `required` on an `Option` of any string type, not only `String`, still
+/// rejects an empty value: the "is `Some`"-only form is limited to numbers,
+/// `bool` and `char`.
+#[test]
+fn required_on_optional_string_types_checks_emptiness() {
+    use std::sync::Arc;
+    #[derive(Validate)]
+    struct S {
+        #[validate(required)]
+        a: Option<Arc<str>>,
+        #[validate(required)]
+        b: Option<Box<str>>,
+        #[validate(required)]
+        c: Option<char>,
+    }
+    let empty = S {
+        a: Some(Arc::from("")),
+        b: Some(Box::from("")),
+        c: Some(' '),
+    };
+    assert_eq!(fields(&empty.validate().unwrap_err()), ["a", "b"]);
+}

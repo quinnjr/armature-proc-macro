@@ -136,18 +136,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     "length" => {
                         let (min, max) = parse_min_max(&meta)?;
                         reject_inverted(&meta, &min, &max)?;
-                        if min.is_none() && max.is_none() {
-                            return Err(meta.error("`length` needs `min`, `max` or both"));
-                        }
                         push(Check::Length { min, max });
                         Ok(())
                     }
                     "range" => {
                         let (min, max) = parse_min_max(&meta)?;
                         reject_inverted(&meta, &min, &max)?;
-                        if min.is_none() && max.is_none() {
-                            return Err(meta.error("`range` needs `min`, `max` or both"));
-                        }
                         push(Check::Range { min, max });
                         Ok(())
                     }
@@ -229,8 +223,9 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         let inner = option_inner(&field.ty);
         let required = checks.iter().any(|r| matches!(r.check, Check::Required));
-        // `required` on a non-string `Option` means only "is `Some`".
-        let string_like = inner.is_none_or(is_string_like);
+        // `required` on an `Option` of a number, `bool` or `char` means only
+        // "is `Some`"; on any other type it also checks emptiness.
+        let string_like = !inner.is_some_and(is_known_non_string);
         let access = quote! { self.#field_ident };
         let (whole, mut unwrapped): (Vec<Rule>, Vec<Rule>) = checks
             .into_iter()
@@ -265,7 +260,9 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 #(#whole)*
             }
         };
-        field_checks.push(custom);
+        if !whole.is_empty() {
+            field_checks.push(custom);
+        }
         if unwrapped_empty && !required {
             continue;
         }
@@ -317,18 +314,36 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
-/// Whether a type is a string the built-in string rules accept: `String`,
-/// `str`, `Cow<str>`, or a reference to one.
-fn is_string_like(ty: &Type) -> bool {
+/// Whether a type is certainly not a string: a primitive number, `bool` or
+/// `char`. `required` on an `Option` of such a type checks only "is `Some`".
+/// Anything else keeps the emptiness check, so an unrecognised string type
+/// (`Box<str>`, `Arc<str>`, an alias, a newtype that derefs to `str`) is
+/// still checked, and a non-string one is a compile error rather than a
+/// silently weaker rule.
+fn is_known_non_string(ty: &Type) -> bool {
     match ty {
-        Type::Reference(r) => is_string_like(&r.elem),
-        Type::Group(g) => is_string_like(&g.elem),
-        Type::Paren(p) => is_string_like(&p.elem),
-        Type::Path(p) => p
-            .path
-            .segments
-            .last()
-            .is_some_and(|s| matches!(s.ident.to_string().as_str(), "String" | "str" | "Cow")),
+        Type::Group(g) => is_known_non_string(&g.elem),
+        Type::Paren(p) => is_known_non_string(&p.elem),
+        Type::Path(p) if p.qself.is_none() => p.path.get_ident().is_some_and(|i| {
+            matches!(
+                i.to_string().as_str(),
+                "u8" | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "usize"
+                    | "i8"
+                    | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "isize"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+            )
+        }),
         _ => false,
     }
 }
@@ -639,7 +654,7 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
             let fails = |bound: &syn::Ident, pass: TokenStream2| {
                 quote_spanned! {span=>
                     !::core::matches!(
-                        ::core::cmp::PartialOrd::partial_cmp(#value, #bound),
+                        ::core::cmp::PartialOrd::partial_cmp(#at_rule, #bound),
                         ::core::option::Option::Some(#pass)
                     )
                 }
@@ -733,9 +748,9 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
         // calls a built-in validator would otherwise pass the value on.
         Check::Custom { func, with_field } => {
             let call = if with_field {
-                quote! { (#func)(#value, #field_name) }
+                quote_spanned! {span=> (#func)(#at_rule, #field_name) }
             } else {
-                quote! { (#func)(#value) }
+                quote_spanned! {span=> (#func)(#at_rule) }
             };
             // The error type is named, so a function generic over it
             // (`fn f<E: From<ValidationError>>(..) -> Result<(), E>`) still
@@ -757,7 +772,7 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
             let nested = format_ident!("__armature_nested", span = Span::mixed_site());
             quote! {
             if let ::std::result::Result::Err(#nested) =
-                #krate::Validate::validate(#value)
+                #krate::Validate::validate(#at_rule)
             {
                 #errors.extend(#nested.into_iter().map(|mut #error| {
                     // A hand-written nested impl may have attached it.
