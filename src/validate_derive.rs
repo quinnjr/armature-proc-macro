@@ -241,11 +241,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let required = checks.iter().any(|r| matches!(r.check, Check::Required));
         // `required` on `Option<Option<T>>` could mean either layer; rather
         // than let the inner `None` pass as "present", reject it.
-        if required
-            && inner
-                .and_then(|i| option_inner(peel_pointers(i).0))
-                .is_some()
-        {
+        if required && inner.is_some_and(|i| option_inner(peel_for_option_check(i)).is_some()) {
             return Err(syn::Error::new(
                 field.ty.span(),
                 "`required` on `Option<Option<_>>` is ambiguous; use `custom`",
@@ -600,8 +596,8 @@ fn anchored(pattern: &str) -> String {
 enum Optional {
     No,
     Concrete,
-    /// Requires `AsRef<str>` of the inner type's core, under this many
-    /// `&`/`Box`/`Arc`/`Rc`/`Cow` layers (0: of the whole inner type).
+    /// Requires `AsRef<str>` of the inner type under this many
+    /// `&`/`Box`/`Arc`/`Rc`/`Cow` layers.
     Generic(usize),
 }
 
@@ -679,6 +675,24 @@ fn peel_pointers(ty: &Type) -> (&Type, usize) {
         }
         _ => (ty, 0),
     }
+}
+
+/// `ty` under any pointer layers, `Pin` included, for the
+/// `Option<Option<_>>` check: `Pin<Box<Option<_>>>` is as ambiguous as
+/// `Box<Option<_>>`.
+fn peel_for_option_check(ty: &Type) -> &Type {
+    let (core, _) = peel_pointers(ty);
+    if let Type::Path(p) = core
+        && p.qself.is_none()
+        && let Some(last) = p.path.segments.last()
+        && last.ident == "Pin"
+        && let PathArguments::AngleBracketed(args) = &last.arguments
+        && args.args.len() == 1
+        && let Some(GenericArgument::Type(inner)) = args.args.first()
+    {
+        return peel_for_option_check(inner);
+    }
+    core
 }
 
 /// The trait the generic `required` branch calls through, so a missing
@@ -1031,8 +1045,8 @@ fn emit_check(
         // Autoref specialisation cannot see through a type parameter: inside
         // the generic `validate()` it would always pick the "is `Some`"
         // fallback, even for `S<String>`. So a generic inner type that might
-        // be a string requires `AsRef<str>` (of its core, under any
-        // `&`/`Box`/`Arc`/`Rc`/`Cow` layers, or of the whole type); without
+        // be a string requires `AsRef<str>` of the type under any
+        // `&`/`Box`/`Arc`/`Rc`/`Cow` layers; without
         // that bound it fails to compile rather than silently skipping the
         // emptiness check. See `classify_optional`.
         Check::Required if matches!(optional, Optional::Generic(_)) => {

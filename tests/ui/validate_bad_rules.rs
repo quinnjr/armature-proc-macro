@@ -55,4 +55,10 @@ struct NestedOptionBehindPointer {
     a: Option<Box<Option<String>>>,
 }
 
+#[derive(Validate)]
+struct NestedOptionBehindPin {
+    #[validate(required)]
+    a: Option<std::pin::Pin<Box<Option<String>>>>,
+}
+
 fn main() {}

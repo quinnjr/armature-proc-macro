@@ -51,3 +51,9 @@ error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
    |
 55 |     a: Option<Box<Option<String>>>,
    |        ^^^^^^
+
+error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
+  --> tests/ui/validate_bad_rules.rs:61:8
+   |
+61 |     a: Option<std::pin::Pin<Box<Option<String>>>>,
+   |        ^^^^^^

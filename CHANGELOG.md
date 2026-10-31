@@ -117,11 +117,13 @@ these fixes only once `armature-validation` depends on this release.
     presence-only check, rather than skip the check. (The message uses
     `#[diagnostic::on_unimplemented]`, which a `#![no_implicit_prelude]`
     crate cannot resolve; such a crate should use `custom` there.);
-  - on `Option<Option<_>>`, also behind a pointer, is a compile error.
+  - on `Option<Option<_>>`, also behind `&`/`Box`/`Arc`/`Rc`/`Cow`/`Pin`,
+    is a compile error.
 
   `Box`, `Arc`, `Rc`, `Cow` and the container names are recognised by name,
   so a user type with one of those names should behave like the standard
-  one.
+  one (a user `Box<T>` without `Deref` fails to compile with "cannot be
+  dereferenced").
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator
