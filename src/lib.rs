@@ -234,16 +234,18 @@ pub fn query_derive(input: TokenStream) -> TokenStream {
 /// field (e.g. `u8`, `f64`), which the built-in `InRange`/`Min`/`Max`
 /// validators do not all cover:
 ///
-/// - `length(min = N, max = M)` — string length bounds (character count)
+/// - `length(min = N, max = M)` — string length bounds (character count);
+///   each bound is a `usize`
 /// - `range(min = N, max = M)` — numeric range bounds (emitted inline). An
-///   unordered value (a float NaN) fails either bound; the submitted value is
-///   not attached to the error
+///   unordered value (a float NaN) fails either bound; each bound expression
+///   is evaluated once
 /// - `email` / `url` — format validators
-/// - `regex(pattern = "...")` — pattern match anywhere in the value (anchor
-///   with `^…$` for a full match). The pattern is checked when the derive
-///   expands, so a bad pattern is a compile error, and compiled once on first
-///   use rather than per `validate()` call
-/// - `required` — has visible content
+/// - `regex = "..."` / `regex(pattern = "...")` — pattern match **anywhere**
+///   in the value; `regex(full = "...")` matches the whole value (`\A…\z`,
+///   which holds even under `(?m)`, unlike `^…$`). The pattern is compiled
+///   when the derive expands, so a bad pattern is a compile error, and
+///   compiled once at runtime rather than per `validate()` call
+/// - `required` — has visible content (and, on an `Option`, is `Some`)
 /// - `custom = "path::to::fn"` — a `fn(&Field) -> Result<(), ValidationError>`;
 ///   an error whose `field` is empty is attributed to this field
 /// - `custom_with_field = "path::to::fn"` — the same, but the function is also
@@ -252,9 +254,13 @@ pub fn query_derive(input: TokenStream) -> TokenStream {
 ///   field that also implements `Validate`; its errors' fields are prefixed
 ///   with this field's name (`address.city`)
 ///
+/// On an `Option<T>` field the rules apply to the value when it is `Some`.
+/// Errors from built-in rules never carry the submitted value; they are sent
+/// to clients. Field names are reported unraw (`r#type` as `type`).
+///
 /// The generated code reaches `armature-validation` through the deriving
 /// crate's own dependency on it, under whatever name it was given, or the
-/// `armature` facade's re-export. Override with a struct-level
+/// `armature-framework` facade's re-export. Override with a struct-level
 /// `#[validate(crate = "path::to::armature_validation")]`.
 ///
 /// ```ignore

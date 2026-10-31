@@ -157,3 +157,175 @@ fn crate_attribute_overrides_the_path() {
         .is_err()
     );
 }
+
+/// No built-in rule echoes the submitted value, whatever runtime version is
+/// underneath (0.7.0's validators attach it).
+#[test]
+fn builtin_rule_errors_do_not_carry_the_value() {
+    #[derive(Validate)]
+    struct Signup {
+        #[validate(length(min = 12))]
+        password: String,
+        #[validate(email)]
+        email: String,
+        #[validate(url)]
+        website: String,
+        #[validate(regex = r"^\d{3}$")]
+        code: String,
+        #[validate(required)]
+        name: String,
+    }
+    let errors = Signup {
+        password: "hunter2".into(),
+        email: "secret-token".into(),
+        website: "ssn-123".into(),
+        code: "x1".into(),
+        name: " ".into(),
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(errors.len(), 5);
+    assert!(errors.iter().all(|e| e.value.is_none()), "{errors:?}");
+}
+
+#[test]
+fn regex_full_anchors_the_whole_value() {
+    #[derive(Validate)]
+    struct Handle {
+        #[validate(regex(full = "[a-z]+"))]
+        handle: String,
+        #[validate(regex(full = "(?m)^[a-z]+$"))]
+        multiline: String,
+    }
+    let ok = Handle {
+        handle: "abc".into(),
+        multiline: "abc".into(),
+    };
+    assert!(ok.validate().is_ok());
+    let bad = Handle {
+        handle: "1<script>a".into(),
+        multiline: "abc\n<script>".into(),
+    };
+    assert_eq!(
+        fields(&bad.validate().unwrap_err()),
+        ["handle", "multiline"]
+    );
+}
+
+#[test]
+fn option_fields_are_validated_when_present() {
+    #[derive(Validate)]
+    struct Profile {
+        #[validate(length(max = 3))]
+        nickname: Option<String>,
+        #[validate(range(min = 18))]
+        age: Option<u32>,
+        #[validate(required)]
+        bio: Option<String>,
+    }
+    let absent = Profile {
+        nickname: None,
+        age: None,
+        bio: None,
+    };
+    assert_eq!(fields(&absent.validate().unwrap_err()), ["bio"]);
+    let bad = Profile {
+        nickname: Some("long".into()),
+        age: Some(7),
+        bio: Some("x".into()),
+    };
+    assert_eq!(fields(&bad.validate().unwrap_err()), ["nickname", "age"]);
+}
+
+#[test]
+fn range_bounds_are_evaluated_once_and_compared_by_reference() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn lo() -> u64 {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        10
+    }
+    #[derive(Validate)]
+    struct Order {
+        #[validate(range(min = lo()))]
+        qty: u64,
+        // Not `Copy`: compared through a reference, not moved out of `self`.
+        #[validate(range(max = "m".to_string()))]
+        code: String,
+    }
+    let errors = Order {
+        qty: 1,
+        code: "z".into(),
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(fields(&errors), ["qty", "code"]);
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+}
+
+/// A custom validator generic over its error type still infers it.
+fn generic_custom<E: From<ValidationError>>(value: &str) -> Result<(), E> {
+    if value.is_empty() {
+        Err(ValidationError::new("", "missing").into())
+    } else {
+        Ok(())
+    }
+}
+
+#[test]
+fn custom_validators_generic_in_the_error_type_compile() {
+    #[derive(Validate)]
+    struct S {
+        #[validate(custom = "generic_custom")]
+        v: String,
+    }
+    assert_eq!(
+        fields(&S { v: String::new() }.validate().unwrap_err()),
+        ["v"]
+    );
+}
+
+#[test]
+fn raw_identifier_fields_are_reported_unraw() {
+    #[derive(Validate)]
+    struct S {
+        #[validate(required)]
+        r#type: String,
+    }
+    let errors = S {
+        r#type: String::new(),
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(fields(&errors), ["type"]);
+    assert!(errors[0].message.starts_with("type "));
+}
+
+/// Generated locals cannot be reached from user expressions: a `custom`
+/// closure naming `__armature_errors` refers to the user's own item.
+#[test]
+fn generated_locals_are_hygienic() {
+    #[allow(non_upper_case_globals)]
+    const errors: u8 = 0;
+    #[allow(non_upper_case_globals)]
+    const e: u8 = 0;
+    let _ = (errors, e);
+    #[derive(Validate)]
+    struct S {
+        #[validate(length(min = 2))]
+        a: String,
+        #[validate(range(min = 1))]
+        b: u8,
+    }
+    assert_eq!(
+        fields(
+            &S {
+                a: "x".into(),
+                b: 0
+            }
+            .validate()
+            .unwrap_err()
+        ),
+        ["a", "b"]
+    );
+}

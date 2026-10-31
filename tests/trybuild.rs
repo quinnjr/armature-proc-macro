@@ -9,10 +9,13 @@ fn decorators_compile() {
     t.pass("tests/ui/middleware_pass.rs");
 }
 
-/// Compile-fail coverage: a `#[derive(Validate)]` regex that does not parse is
-/// a build error at the pattern, not a runtime failure on every request.
+/// Compile-fail coverage for `#[derive(Validate)]`: a regex that does not
+/// compile, a `crate = ...` override that does not resolve (proving it is
+/// used), and attribute mistakes that would otherwise weaken a rule silently.
 #[test]
 fn validate_derive_rejects_bad_regex() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/validate_bad_regex.rs");
+    t.compile_fail("tests/ui/validate_bad_crate_path.rs");
+    t.compile_fail("tests/ui/validate_bad_rules.rs");
 }

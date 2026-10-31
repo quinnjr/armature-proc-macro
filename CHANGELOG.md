@@ -9,44 +9,76 @@ Earlier changes are recorded in the workspace [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
-Breaking: the next release is 0.7.0 (`#[derive(Validate)]` reports nested
-errors under a new field path and rejects invalid regex patterns at compile
-time).
+Breaking: the next release is 0.7.0. `#[derive(Validate)]` reports nested
+errors under a new field path, rejects at compile time attribute forms it used
+to accept (invalid or oversized regex patterns, unknown `regex(...)` keys,
+duplicate or inverted bounds, empty `#[validate()]`, non-`usize` length
+bounds, struct-level `#[validate(...)]` other than `crate`), and no longer
+attaches submitted values to errors.
 
 ### Security
 
-- **`#[derive(Validate)]` `range` with only `min` or only `max` rejects NaN.**
-  It emitted `__v < min` / `__v > max`, both false for NaN, so
+- **One-sided `range` rejects NaN.** `range(min = ..)` / `range(max = ..)`
+  emitted `value < min` / `value > max`, both false for NaN, so
   `#[validate(range(min = 0.0))]` accepted `f64::NAN` (and `"NaN".parse()` is
   how a query or form value becomes one). Bounds are now checked through
   `PartialOrd::partial_cmp`, failing an unordered value.
-- **`range` errors no longer carry the submitted value.** The derive attached
-  it with `with_value`; validation errors are sent to clients.
-- **`regex` patterns are compiled once per field instead of on every
-  `validate()` call.** Recompiling per request cost milliseconds of CPU for
-  Unicode patterns such as `[\w.-]{3,32}` on every request to the endpoint.
+- **Errors no longer carry the submitted value (breaking).** `range` attached
+  it with `with_value`, and the built-in validators behind `length`, `email`,
+  `url`, `regex` and `required` attach it in `armature-validation` 0.7.0; the
+  generated code now clears it on every built-in rule's error, since
+  validation errors are sent to clients. A value a `custom` validator attaches
+  on purpose is kept.
+- **`regex(pattern = ...)` no longer accepts any key.** `regex(full = ...)` or
+  a typo such as `regex(patern = ...)` silently became a substring match; an
+  unknown key is now a compile error, and `regex(full = "...")` is a real
+  whole-value match (see Added).
+- **`length` bounds are type-checked, not cast.** A non-literal bound was
+  emitted as `expr as usize`, so `length(max = NEG)` with `const NEG: i64 = -1`
+  became `usize::MAX` and lifted the limit. A non-`usize` bound is now a type
+  error.
+- **`regex` patterns are compiled once per rule instead of on every
+  `validate()` call.**
 
 ### Changed
 
-- **Breaking:** a `regex` pattern that does not parse is a compile error at
-  the pattern, not a 400 on every request carrying the regex error text.
+- **Breaking:** `regex` patterns are compiled when the derive expands, with
+  the same engine and limits as the runtime, so a pattern that does not parse
+  or is too large to compile is a compile error at the pattern rather than a
+  failure on every request.
 - **Breaking:** errors from a nested `#[validate]` field are prefixed with the
   parent field's name (`billing.city`), so two fields of the same type report
   distinct paths.
+- **Breaking:** duplicate `min`/`max` keys, literal bounds with `min > max`, an
+  empty `#[validate()]`, and struct-level `#[validate(...)]` other than
+  `crate = "..."` (previously ignored) are compile errors.
+- `range` compares through a reference (non-`Copy` fields work) and evaluates
+  each bound expression once.
 - An error returned by a `custom` validator with an empty `field` is
-  attributed to the annotated field.
+  attributed to the annotated field; the error type is fixed to
+  `ValidationError`, so a validator generic over its error type still infers.
+- Field names are reported unraw (`r#type` as `type`).
+- Generated locals use mixed-site hygiene and every macro call is fully
+  qualified, so user items named `errors` or `e`, or a user `format!`, cannot
+  collide with or alter the generated code. The impl is
+  `#[automatically_derived]`.
 - The generated code finds `armature-validation` through the deriving crate's
-  manifest (a renamed dependency, or the `armature` facade's re-export)
-  instead of assuming `::armature_validation`.
+  manifest: a renamed dependency, or the `armature-framework` facade (as
+  `::armature::armature_validation`, or under its renamed key), instead of
+  assuming `::armature_validation`.
 
 ### Added
 
+- `Option<T>` fields: rules apply to the value when present; `required` also
+  rejects `None`.
+- `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
+  unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator
   (`fn(&Field, &str)`), so one function can serve several fields.
 - Struct-level `#[validate(crate = "path")]` to name the path to
   `armature-validation` explicitly.
-- Dependencies: `proc-macro-crate` (crate-path resolution) and `regex-syntax`
-  (compile-time pattern check).
+- Dependencies: `proc-macro-crate` (crate-path resolution) and `regex`
+  (expansion-time pattern compilation).
 
 ## [0.6.0] - 2026-10-29
 
