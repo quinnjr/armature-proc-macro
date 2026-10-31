@@ -96,15 +96,20 @@ these fixes only once `armature-validation` depends on this release.
 ### Added
 
 - `Option<T>` fields (detected syntactically; a type alias is not seen
-  through): built-in rules and `nested` apply to the value when it is `Some`
-  and are skipped for `None`; `required` also rejects `None` (and checks
-  emptiness when the inner type is, or derefs to, an `AsRef<str>` type —
-  `String`, `Box<str>`, `Arc<str>`, `Cow<str>`, `Arc<String>`,
-  `Box<String>`, a `Deref<Target = str>` newtype — so `required` on
-  `Option<u32>` or `Option<Uuid>` means "is `Some`"; on an `Option` of a type parameter it
-  requires `T: AsRef<str>`, since the type is not known when the derive
-  expands; on `Option<Option<_>>` it is a compile error). `custom` validators still get
-  the whole `&Option<T>`, as before, so they can act on `None`.
+  through, so an alias for `Option` also escapes the `Option<Option<_>>`
+  check below): built-in rules and `nested` apply to the value when it is
+  `Some` and are skipped for `None`. `required` also rejects `None`, and
+  checks emptiness when the inner type is, or reaches through up to three
+  `Deref` steps (references included), an `AsRef<str>` type — `String`,
+  `&str`, `Box<str>`, `Arc<str>`, `Cow<str>`, `Arc<String>`,
+  `&Arc<String>`, a `Deref<Target = str>` newtype — and otherwise means
+  "is `Some`" (`Option<u32>`, `Option<Uuid>`, `Option<Vec<T>>`). When the
+  inner type could be a string for some choice of a type parameter (`T`,
+  `T::Assoc`, a type macro, or those behind `&`/`Box`/`Arc`/`Rc`), it
+  requires that type to be `AsRef<str>`, since the derive cannot specialise
+  on it. `required` on `Option<Option<_>>` is a compile error. `custom`
+  validators still get the whole `&Option<T>`, as before, so they can act on
+  `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator

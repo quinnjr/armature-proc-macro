@@ -247,8 +247,8 @@ pub fn query_derive(input: TokenStream) -> TokenStream {
 ///   compiled once at runtime rather than per `validate()` call
 /// - `required` — not empty, as the runtime's `NotEmpty` defines it (and, on
 ///   an `Option`, is `Some`; emptiness is checked there when the inner type
-///   is, or derefs to, an `AsRef<str>` type, and on an `Option` of a type
-///   parameter `T: AsRef<str>` is required)
+///   is, or reaches through up to three `Deref` steps, an `AsRef<str>` type;
+///   an inner type parameter that could be a string must be `AsRef<str>`)
 /// - `custom = "path::to::fn"` — a `fn(&Field) -> Result<(), ValidationError>`;
 ///   an error whose `field` is empty is attributed to this field
 /// - `custom_with_field = "path::to::fn"` — the same, but the function is also

@@ -11,6 +11,7 @@
     clippy::items_after_statements,
     // Field types chosen to exercise `required` on string-like smart pointers.
     clippy::box_collection,
+    clippy::redundant_allocation,
     clippy::struct_field_names,
     // `custom` validators take `&Field` by the derive's contract.
     clippy::ref_option,
@@ -548,4 +549,61 @@ fn required_on_generic_optional_field_checks_emptiness() {
     assert_eq!(fields(&empty.validate().unwrap_err()), ["name"]);
     assert!(Named { name: Some("x") }.validate().is_ok());
     assert!(Named::<&str> { name: None }.validate().is_err());
+}
+
+/// Up to three `Deref` steps, references included, reach the emptiness check,
+/// as deref coercion does for the same types outside an `Option`.
+#[test]
+fn required_on_optional_multi_deref_strings_checks_emptiness() {
+    use std::rc::Rc;
+    use std::sync::Arc;
+    struct DStr(String);
+    impl std::ops::Deref for DStr {
+        type Target = str;
+        fn deref(&self) -> &str {
+            &self.0
+        }
+    }
+    #[derive(Validate)]
+    struct S {
+        #[validate(required)]
+        a: Option<&'static Arc<String>>,
+        #[validate(required)]
+        b: Option<Rc<DStr>>,
+        #[validate(required)]
+        c: Option<Arc<Box<String>>>,
+        #[validate(required)]
+        d: Option<&'static Rc<Box<String>>>,
+    }
+    let empty = S {
+        a: Some(Box::leak(Box::new(Arc::new(String::new())))),
+        b: Some(Rc::new(DStr(String::new()))),
+        c: Some(Arc::new(Box::new(String::new()))),
+        d: Some(Box::leak(Box::new(Rc::new(Box::new(String::new()))))),
+    };
+    assert_eq!(fields(&empty.validate().unwrap_err()), ["a", "b", "c", "d"]);
+}
+
+/// A generic inner type that can never be a string (`Vec<T>`, a typed id)
+/// means "is `Some`"; one that can (`T` behind `Box`) needs `T: AsRef<str>`
+/// and checks emptiness.
+#[test]
+fn required_on_generic_wrappers() {
+    struct Id<T>(u64, std::marker::PhantomData<T>);
+    #[derive(Validate)]
+    struct S<T: AsRef<str>> {
+        #[validate(required)]
+        boxed: Option<Box<T>>,
+        #[validate(required)]
+        many: Option<Vec<T>>,
+        #[validate(required)]
+        id: Option<Id<T>>,
+    }
+    let s: S<String> = S {
+        boxed: Some(Box::new(String::new())),
+        many: Some(Vec::new()),
+        id: Some(Id(1, std::marker::PhantomData)),
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["boxed"]);
+    let _ = s.id.map(|i| i.0);
 }

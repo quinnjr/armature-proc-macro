@@ -241,8 +241,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
         let optional = match inner {
             None => Optional::No,
-            Some(inner) if mentions_type_param(inner, &type_params) => Optional::Generic,
-            Some(_) => Optional::Concrete,
+            Some(inner) => match generic_string_candidate(inner, &type_params) {
+                Some(layers) => Optional::Generic(layers),
+                None => Optional::Concrete,
+            },
         };
         needs_not_empty_helpers |= required && optional == Optional::Concrete;
         let access = quote! { self.#field_ident };
@@ -584,7 +586,45 @@ fn anchored(pattern: &str) -> String {
 enum Optional {
     No,
     Concrete,
-    Generic,
+    /// The inner type is a type parameter (or an associated type of one),
+    /// possibly behind this many `&`/`Box`/`Arc`/`Rc` layers.
+    Generic(usize),
+}
+
+/// If `ty` could be a string for some choice of the struct's type
+/// parameters — a bare parameter, an associated type of one, or a type macro
+/// (which the derive cannot see into), behind any number of `&`, `Box`,
+/// `Arc` or `Rc` layers — the number of those layers.
+fn generic_string_candidate(ty: &Type, params: &[syn::Ident]) -> Option<usize> {
+    match ty {
+        Type::Group(g) => generic_string_candidate(&g.elem, params),
+        Type::Paren(p) => generic_string_candidate(&p.elem, params),
+        Type::Macro(_) => Some(0),
+        Type::Reference(r) => generic_string_candidate(&r.elem, params).map(|n| n + 1),
+        Type::Path(p) => {
+            if p.qself.is_some() {
+                return mentions_type_param(ty, params).then_some(0);
+            }
+            let first = p.path.segments.first()?;
+            if p.path.leading_colon.is_none() && params.contains(&first.ident) {
+                return Some(0);
+            }
+            let last = p.path.segments.last()?;
+            if !matches!(last.ident.to_string().as_str(), "Box" | "Arc" | "Rc") {
+                return None;
+            }
+            let PathArguments::AngleBracketed(args) = &last.arguments else {
+                return None;
+            };
+            match args.args.first()? {
+                GenericArgument::Type(inner) if args.args.len() == 1 => {
+                    generic_string_candidate(inner, params).map(|n| n + 1)
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Whether `ty` mentions any of `params` (the struct's type parameters).
@@ -613,50 +653,75 @@ fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
 }
 
 /// Helpers for `required` on an `Option<T>` field, emitted once at the top of
-/// `validate()` when needed. Autoref specialisation picks, in order:
+/// `validate()` when needed. Autoref specialisation picks the first that
+/// applies:
 ///
-/// 1. the emptiness check when `T: AsRef<str>` (`String`, `&str`, `Box<str>`,
-///    `Arc<str>`, `Cow<str>`, an `AsRef<str>` newtype);
-/// 2. the emptiness check through `Deref` when `T::Target: AsRef<str>`
-///    (`Arc<String>`, `Box<String>`, `Rc<String>`, a `Deref<Target = str>`
-///    newtype);
-/// 3. only the `Some` check otherwise (a number, a `Uuid`, a nested struct).
+/// 1. `T: AsRef<str>` (`String`, `&str`, `Box<str>`, `Arc<str>`, `Cow<str>`,
+///    an `AsRef<str>` newtype): emptiness check;
+/// 2. – 4. one, two or three `Deref` steps to an `AsRef<str>` type
+///    (`Arc<String>`, `&Arc<String>`, `Rc<DerefToStr>`,
+///    `&Rc<Box<String>>`, ...): emptiness check through the derefs, as deref
+///    coercion would do for the same type outside an `Option`;
+/// 5. otherwise (a number, a `Uuid`, a nested struct): only the `Some`
+///    check.
 ///
-/// Method lookup on `&&__ArmatureNotEmpty(v)` tries `Self = &W` first, then
-/// `Self = &&W` (autoref), then `Self = W` (after one deref), so the three
-/// impls sit on `&W`, `&&W` and `W` respectively.
+/// Method lookup on `&&&&W` tries `Self` = `&&&W`, `&&&&W` (autoref), `&&W`,
+/// `&W`, then `W` (each further deref), so the five impls sit there in order.
 fn not_empty_helpers(krate: &TokenStream2) -> TokenStream2 {
     let ret = quote! { ::std::option::Option<#krate::ValidationError> };
+    let sized = quote! { ?::core::marker::Sized };
+    let deref = quote! { ::core::ops::Deref };
+    let as_str = quote! { ::core::convert::AsRef<str> };
+    let check = |expr: TokenStream2| {
+        quote! {
+            fn __armature_check(&self, field: &str) -> #ret {
+                #krate::NotEmpty::validate(::core::convert::AsRef::<str>::as_ref(#expr), field).err()
+            }
+        }
+    };
+    let level0 = check(quote! { self.0 });
+    let level1 = check(quote! { &**self.0 });
+    let level2 = check(quote! { &***self.0 });
+    let level3 = check(quote! { &****self.0 });
     quote! {
-        struct __ArmatureNotEmpty<'a, T: ?::core::marker::Sized>(&'a T);
-        trait __ArmatureStrNotEmpty {
-            fn __armature_check(&self, field: &str) -> #ret;
-        }
-        impl<T: ?::core::marker::Sized + ::core::convert::AsRef<str>> __ArmatureStrNotEmpty
-            for &__ArmatureNotEmpty<'_, T>
-        {
-            fn __armature_check(&self, field: &str) -> #ret {
-                #krate::NotEmpty::validate(self.0.as_ref(), field).err()
-            }
-        }
-        trait __ArmatureDerefNotEmpty {
-            fn __armature_check(&self, field: &str) -> #ret;
-        }
-        impl<T> __ArmatureDerefNotEmpty for &&__ArmatureNotEmpty<'_, T>
-        where
-            T: ?::core::marker::Sized + ::core::ops::Deref,
-            T::Target: ::core::convert::AsRef<str>,
-        {
-            fn __armature_check(&self, field: &str) -> #ret {
-                #krate::NotEmpty::validate((**self.0).as_ref(), field).err()
-            }
-        }
-        trait __ArmatureAnyNotEmpty {
+        struct __ArmatureNotEmpty<'a, T: #sized>(&'a T);
+        trait __ArmatureNotEmpty0 { fn __armature_check(&self, field: &str) -> #ret; }
+        trait __ArmatureNotEmpty1 { fn __armature_check(&self, field: &str) -> #ret; }
+        trait __ArmatureNotEmpty2 { fn __armature_check(&self, field: &str) -> #ret; }
+        trait __ArmatureNotEmpty3 { fn __armature_check(&self, field: &str) -> #ret; }
+        trait __ArmatureNotEmptyAny {
             fn __armature_check(&self, _field: &str) -> #ret {
                 ::std::option::Option::None
             }
         }
-        impl<T: ?::core::marker::Sized> __ArmatureAnyNotEmpty for __ArmatureNotEmpty<'_, T> {}
+        impl<T: #sized + #as_str> __ArmatureNotEmpty0 for &&&__ArmatureNotEmpty<'_, T> {
+            #level0
+        }
+        impl<T> __ArmatureNotEmpty1 for &&&&__ArmatureNotEmpty<'_, T>
+        where
+            T: #sized + #deref,
+            T::Target: #as_str,
+        {
+            #level1
+        }
+        impl<T> __ArmatureNotEmpty2 for &&__ArmatureNotEmpty<'_, T>
+        where
+            T: #sized + #deref,
+            T::Target: #deref,
+            <T::Target as #deref>::Target: #as_str,
+        {
+            #level2
+        }
+        impl<T> __ArmatureNotEmpty3 for &__ArmatureNotEmpty<'_, T>
+        where
+            T: #sized + #deref,
+            T::Target: #deref,
+            <T::Target as #deref>::Target: #deref,
+            <<T::Target as #deref>::Target as #deref>::Target: #as_str,
+        {
+            #level3
+        }
+        impl<T: #sized> __ArmatureNotEmptyAny for __ArmatureNotEmpty<'_, T> {}
     }
 }
 
@@ -811,20 +876,31 @@ fn emit_check(
                 }
             })
         }
-        // On an `Option` field (this branch runs for `Some`), emptiness is
-        // checked only when the inner type is a string; see
-        // `not_empty_helpers`.
         // Autoref specialisation cannot see through a type parameter: inside
         // the generic `validate()` it would always pick the "is `Some`"
-        // fallback, even for `S<String>`. So for an inner type that mentions
-        // one, require `AsRef<str>` outright; without that bound it fails to
-        // compile rather than silently skipping the emptiness check.
-        Check::Required if optional == Optional::Generic => push_builtin(quote_spanned! {span=>
-            #krate::NotEmpty::validate(::core::convert::AsRef::<str>::as_ref(#at_rule), #field_name)
-        }),
+        // fallback, even for `S<String>`. So for an inner type that could be
+        // a string for some choice of the parameter, require that parameter
+        // (under its `&`/`Box`/`Arc`/`Rc` layers) to be `AsRef<str>`; without
+        // that bound it fails to compile rather than silently skipping the
+        // emptiness check. Other generic inner types (`Vec<T>`, `Id<T>`) can
+        // never be strings and use the specialisation below.
+        Check::Required if matches!(optional, Optional::Generic(_)) => {
+            let Optional::Generic(layers) = optional else {
+                unreachable!()
+            };
+            let mut inner = quote! { #at_rule };
+            for _ in 0..layers {
+                inner = quote! { &**(#inner) };
+            }
+            push_builtin(quote_spanned! {span=>
+                #krate::NotEmpty::validate(::core::convert::AsRef::<str>::as_ref(#inner), #field_name)
+            })
+        }
+        // On an `Option` field (this branch runs for `Some`), the emptiness
+        // check is chosen by the inner type; see `not_empty_helpers`.
         Check::Required if optional == Optional::Concrete => quote! {
             if let ::std::option::Option::Some(mut #error) =
-                (&&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
+                (&&&&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
             {
                 #error.value = ::std::option::Option::None;
                 #errors.push(#error);
