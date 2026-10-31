@@ -103,7 +103,7 @@ these fixes only once `armature-validation` depends on this release.
   `Box<String>`, a `Deref<Target = str>` newtype — so `required` on
   `Option<u32>` or `Option<Uuid>` means "is `Some`"; on an `Option` of a type parameter it
   requires `T: AsRef<str>`, since the type is not known when the derive
-  expands). `custom` validators still get
+  expands; on `Option<Option<_>>` it is a compile error). `custom` validators still get
   the whole `&Option<T>`, as before, so they can act on `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).

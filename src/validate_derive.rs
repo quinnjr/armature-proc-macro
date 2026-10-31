@@ -231,6 +231,14 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         let inner = option_inner(&field.ty);
         let required = checks.iter().any(|r| matches!(r.check, Check::Required));
+        // `required` on `Option<Option<T>>` could mean either layer; rather
+        // than let the inner `None` pass as "present", reject it.
+        if required && inner.and_then(option_inner).is_some() {
+            return Err(syn::Error::new(
+                field.ty.span(),
+                "`required` on `Option<Option<_>>` is ambiguous; use `custom`",
+            ));
+        }
         let optional = match inner {
             None => Optional::No,
             Some(inner) if mentions_type_param(inner, &type_params) => Optional::Generic,

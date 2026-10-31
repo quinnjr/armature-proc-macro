@@ -39,3 +39,9 @@ error: unexpected end of input, expected nested attribute
    |
 42 |     #[validate(length())]
    |                       ^
+
+error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
+  --> tests/ui/validate_bad_rules.rs:49:8
+   |
+49 |     a: Option<Option<String>>,
+   |        ^^^^^^

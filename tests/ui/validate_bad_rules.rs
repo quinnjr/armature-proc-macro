@@ -43,4 +43,10 @@ struct BoundlessLength {
     a: String,
 }
 
+#[derive(Validate)]
+struct NestedOptionRequired {
+    #[validate(required)]
+    a: Option<Option<String>>,
+}
+
 fn main() {}
