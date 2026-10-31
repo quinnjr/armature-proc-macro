@@ -923,3 +923,33 @@ fn required_where_clause_and_static_bound_shapes() {
     assert_eq!(fields(&g.validate().unwrap_err()), ["f"]);
     let _ = g.t;
 }
+
+/// In a struct with a where-clause type predicate but no type or const
+/// parameters, a type macro inner type is checked through `AsRef<str>`, and
+/// a never-a-string container of `Self` still means "is `Some`".
+#[test]
+fn required_with_type_predicate_macros_and_self_containers() {
+    macro_rules! id {
+        ($t:ty) => {
+            $t
+        };
+    }
+    #[derive(Validate)]
+    struct N<'a>
+    where
+        String: Sized,
+    {
+        #[validate(required)]
+        name: Option<id!(String)>,
+        #[validate(required)]
+        kids: Option<Vec<Self>>,
+        tag: &'a str,
+    }
+    let n = N {
+        name: Some(String::new()),
+        kids: Some(Vec::new()),
+        tag: "",
+    };
+    assert_eq!(fields(&n.validate().unwrap_err()), ["name"]);
+    let _ = n.tag;
+}

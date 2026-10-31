@@ -265,7 +265,8 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             Some(inner)
                 if has_type_predicate
                     && generic_params.is_empty()
-                    && mentions_self_or_macro(inner) =>
+                    && mentions_self_or_macro(inner)
+                    && !never_a_string(peel_pointers(inner).0) =>
             {
                 Optional::Generic(peel_pointers(inner).1)
             }
@@ -293,7 +294,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // `Self` is classified generic and never reaches here.
         let isolated = (optional == Optional::Concrete
             && needs_isolation
-            && inner.is_some_and(|i| !mentions_type_param(i, &generic_params)))
+            // `Self` or a macro reaches here only as a never-a-string
+            // container, whose in-place check can only give "is `Some`"
+            // anyway; a nested fn could not name it.
+            && inner.is_some_and(|i| {
+                !mentions_type_param(i, &generic_params) && !mentions_self_or_macro(i)
+            }))
         .then_some(inner)
         .flatten();
         let nested = isolated
@@ -830,12 +836,13 @@ fn never_a_string(ty: &Type) -> bool {
     }
 }
 
-/// The struct's lifetime parameters that `ty` mentions, with their outlives
-/// bounds, for the nested fn's signature (only those, so strict crates'
-/// `unused_lifetimes` stays quiet). Only lifetimes: copying type parameters
-/// or where predicates would bring back exactly what the nesting is there to
-/// avoid. A bound naming a lifetime the type does not mention is dropped
-/// with it; outlives bounds cannot change which impl applies.
+/// The struct's lifetime parameters for the nested fn's signature: those
+/// `ty` mentions, closed over their outlives bounds (inline and
+/// where-clause), with those bounds and any `'static` bound. Only lifetimes:
+/// copying type parameters or where-clause type predicates would bring back
+/// exactly what the nesting is there to avoid; outlives bounds cannot change
+/// which impl applies. Unmentioned, unbounding lifetimes are left out so
+/// strict crates' `unused_lifetimes` stays quiet.
 fn nested_lifetimes(generics: &syn::Generics, ty: &Type) -> TokenStream2 {
     struct Used(Vec<syn::Ident>);
     impl<'ast> syn::visit::Visit<'ast> for Used {

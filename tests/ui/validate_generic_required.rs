@@ -33,4 +33,16 @@ struct HiddenByMacro<T> {
     name: Option<N<id!(T)>>,
 }
 
+// A where-clause type predicate forces the isolated check, which cannot
+// name `Self`: an inner `Box<Self>` must then be `AsRef<str>`.
+#[derive(Validate)]
+struct SelfUnderPredicate<'a>
+where
+    String: Sized,
+{
+    #[validate(required)]
+    parent: Option<Box<Self>>,
+    tag: &'a str,
+}
+
 fn main() {}

@@ -116,11 +116,13 @@ these fixes only once `armature-validation` depends on this release.
     In a struct with type or const parameters or a where-clause type
     predicate, a concrete inner type that mentions no type or const
     parameter is checked in a nested function that declares only the
-    lifetimes it uses (with their outlives bounds, followed transitively,
+    lifetimes it uses and those they are bounded by (with the bounds,
     `'static` included), so the struct's type
     parameters and where-clauses cannot change which check applies; in such
-    a struct without type parameters, an inner type naming `Self` or using a
-    type macro must be `AsRef<str>`. `Pin<..>` and type aliases are not
+    a struct without type or const parameters, an inner type naming `Self` or
+    using a type macro must be `AsRef<str>` (unless it is a never-a-string
+    container). A field type that is only well-formed because of a
+    where-clause type predicate fails to compile there; use `custom`. `Pin<..>` and type aliases are not
     seen through, so in practice they need `custom`; a user impl of
     `AsRef<str>` for `Box<W<T>>` itself no longer suffices (`W<T>` must be
     `AsRef<str>`). These fail to compile, with a message pointing to

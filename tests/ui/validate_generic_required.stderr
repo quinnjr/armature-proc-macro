@@ -68,3 +68,27 @@ note: required for `N<T>` to implement `<HiddenByMacro<T> as Validate>::validate
    = help: consider manually implementing `<HiddenByMacro<T> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
    = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
    = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `#[validate(required)]` on an `Option` of `SelfUnderPredicate<'_>` needs `SelfUnderPredicate<'_>: AsRef<str>`
+  --> tests/ui/validate_generic_required.rs:38:10
+   |
+38 | #[derive(Validate)]
+   |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+...
+43 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+help: the trait `AsRef<str>` is not implemented for `SelfUnderPredicate<'_>`
+  --> tests/ui/validate_generic_required.rs:39:1
+   |
+39 | struct SelfUnderPredicate<'a>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: use `custom` for a presence-only check, or, if `SelfUnderPredicate<'_>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `SelfUnderPredicate<'_>` to implement `<SelfUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+  --> tests/ui/validate_generic_required.rs:38:10
+   |
+38 | #[derive(Validate)]
+   |          ^^^^^^^^ type parameter would need to implement `<SelfUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<SelfUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
