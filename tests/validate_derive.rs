@@ -926,7 +926,7 @@ fn required_where_clause_and_static_bound_shapes() {
 
 /// In a struct with a where-clause type predicate but no type or const
 /// parameters, a type macro inner type is checked through `AsRef<str>`, and
-/// a never-a-string container of `Self` still means "is `Some`".
+/// an array of `Self` still means "is `Some`".
 #[test]
 fn required_with_type_predicate_macros_and_self_containers() {
     macro_rules! id {
@@ -942,12 +942,12 @@ fn required_with_type_predicate_macros_and_self_containers() {
         #[validate(required)]
         name: Option<id!(String)>,
         #[validate(required)]
-        kids: Option<Vec<Self>>,
+        kids: Option<[Box<Self>; 0]>,
         tag: &'a str,
     }
     let n = N {
         name: Some(String::new()),
-        kids: Some(Vec::new()),
+        kids: Some([]),
         tag: "",
     };
     assert_eq!(fields(&n.validate().unwrap_err()), ["name"]);
@@ -984,4 +984,53 @@ fn required_isolated_check_follows_lifetime_chains() {
     };
     assert_eq!(fields(&x.validate().unwrap_err()), ["f"]);
     let _ = x.t;
+}
+
+/// A look-alike container reached through another module is not trusted
+/// as never-a-string: here it derefs to a string and a where-clause would
+/// hide that from an in-place check.
+#[test]
+fn required_does_not_trust_lookalike_containers() {
+    mod m {
+        pub struct Vec<T>(pub String, pub std::marker::PhantomData<T>);
+        impl<T> std::ops::Deref for Vec<T> {
+            type Target = String;
+            fn deref(&self) -> &String {
+                &self.0
+            }
+        }
+    }
+    #[derive(Validate)]
+    struct S<T> {
+        #[validate(required)]
+        v: Option<m::Vec<u8>>,
+        t: T,
+    }
+    let s = S {
+        v: Some(m::Vec(String::new(), std::marker::PhantomData)),
+        t: 0_u8,
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["v"]);
+    let _ = s.t;
+}
+
+/// A `Self` container named like `Vec` is not trusted in a predicate-bearing
+/// struct without type parameters (it fails closed); a tuple of `Self` is.
+#[test]
+fn required_self_in_tuple_under_predicate_means_some() {
+    #[derive(Validate)]
+    struct T<'a>
+    where
+        String: Sized,
+    {
+        #[validate(required)]
+        pair: Option<(Box<Self>,)>,
+        tag: &'a str,
+    }
+    let t = T {
+        pair: None,
+        tag: "",
+    };
+    assert_eq!(fields(&t.validate().unwrap_err()), ["pair"]);
+    let _ = t.tag;
 }

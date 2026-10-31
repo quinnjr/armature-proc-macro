@@ -261,12 +261,19 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             None => Optional::No,
             // A struct with where-clause type predicates but no type or const
             // parameters must isolate, and a nested fn cannot name `Self` or
-            // see into a type macro: such a type fails closed.
+            // see into a type macro: such a type fails closed, unless it is a
+            // tuple, array or slice (syntax nothing can shadow, never a
+            // string; checked in place, see below). A named container is not
+            // exempt: a look-alike type with that name could deref to a
+            // string, and the where-clause could hide it in place.
             Some(inner)
                 if has_type_predicate
                     && generic_params.is_empty()
                     && mentions_self_or_macro(inner)
-                    && !never_a_string(peel_pointers(inner).0) =>
+                    && !matches!(
+                        peel_pointers(inner).0,
+                        Type::Tuple(_) | Type::Array(_) | Type::Slice(_)
+                    ) =>
             {
                 Optional::Generic(peel_pointers(inner).1)
             }
@@ -290,13 +297,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // Needed when the struct has type or const parameters or a
         // where-clause type predicate; without any, the check in place is
         // exact (and a type macro or `Self` there, which a nested fn could
-        // not name, is no problem). Where isolation is needed, a macro or
-        // `Self` is classified generic and never reaches here.
+        // not name, is no problem).
         let isolated = (optional == Optional::Concrete
             && needs_isolation
-            // `Self` or a macro reaches here only as a never-a-string
-            // container, whose in-place check can only give "is `Some`"
-            // anyway; a nested fn could not name it.
+            // `Self` or a macro reaches here only inside a tuple, array or
+            // slice, whose in-place check can only give "is `Some`"; a nested
+            // fn could not name it.
             && inner.is_some_and(|i| {
                 !mentions_type_param(i, &generic_params) && !mentions_self_or_macro(i)
             }))
@@ -818,20 +824,31 @@ fn never_a_string(ty: &Type) -> bool {
         Type::Group(g) => never_a_string(&g.elem),
         Type::Paren(p) => never_a_string(&p.elem),
         Type::Tuple(_) | Type::Array(_) | Type::Slice(_) => true,
-        Type::Path(p) if p.qself.is_none() => p.path.segments.last().is_some_and(|s| {
-            matches!(
-                s.ident.to_string().as_str(),
-                "Vec"
-                    | "VecDeque"
-                    | "LinkedList"
-                    | "BinaryHeap"
-                    | "HashMap"
-                    | "BTreeMap"
-                    | "HashSet"
-                    | "BTreeSet"
-                    | "Result"
-            )
-        }),
+        // Written bare or under `std`/`alloc`/`core` only: a path through some
+        // other module (`m::Vec<T>`) may be a look-alike that derefs to a
+        // string, and a where-clause could then hide that from the check.
+        Type::Path(p)
+            if p.qself.is_none()
+                && (p.path.segments.len() == 1
+                    || p.path.segments.first().is_some_and(|s| {
+                        matches!(s.ident.to_string().as_str(), "std" | "alloc" | "core")
+                    })) =>
+        {
+            p.path.segments.last().is_some_and(|s| {
+                matches!(
+                    s.ident.to_string().as_str(),
+                    "Vec"
+                        | "VecDeque"
+                        | "LinkedList"
+                        | "BinaryHeap"
+                        | "HashMap"
+                        | "BTreeMap"
+                        | "HashSet"
+                        | "BTreeSet"
+                        | "Result"
+                )
+            })
+        }
         _ => false,
     }
 }

@@ -120,23 +120,27 @@ these fixes only once `armature-validation` depends on this release.
     `'static` included), so the struct's type
     parameters and where-clauses cannot change which check applies; in such
     a struct without type or const parameters, an inner type naming `Self` or
-    using a type macro must be `AsRef<str>` (unless it is a never-a-string
-    container). A field type that is only well-formed because of a
-    where-clause type predicate fails to compile there; use `custom`. `Pin<..>` and type aliases are not
-    seen through, so in practice they need `custom`; a user impl of
-    `AsRef<str>` for `Box<W<T>>` itself no longer suffices (`W<T>` must be
-    `AsRef<str>`). These fail to compile, with a message pointing to
-    `custom` for a presence-only check, rather than skip the check. (The
-    message uses `#[diagnostic::on_unimplemented]`, which a
-    `#![no_implicit_prelude]` crate cannot resolve; such a crate should use
-    `custom` there.)
+    using a type macro must be `AsRef<str>` under its pointer layers (unless
+    it is a tuple, array or slice). A field type that is only well-formed
+    because of a where-clause type predicate fails to compile there; use
+    `custom`. `Pin<..>` and type aliases are not seen through, so in
+    practice they need `custom`; a user impl of `AsRef<str>` for `Box<W<T>>`
+    itself no longer suffices (`W<T>` must be `AsRef<str>`). These fail to
+    compile, with a message pointing to `custom` for a presence-only check,
+    rather than skip the check. (The message uses
+    `#[diagnostic::on_unimplemented]`, which a `#![no_implicit_prelude]`
+    crate cannot resolve; such a crate should use `custom` there.)
   - on `Option<Option<_>>`, also behind `&`/`Box`/`Arc`/`Rc`/`Cow`/`Pin`,
     is a compile error.
 
-  `Box`, `Arc`, `Rc`, `Cow` and the container names are recognised by name,
+  `Box`, `Arc`, `Rc`, `Cow` and the container names (the latter only bare
+  or under `std`/`alloc`/`core`) are recognised by name,
   so a user type with one of those names should behave like the standard
   one (a user `Box<T>` without `Deref` fails to compile with "cannot be
-  dereferenced").
+  dereferenced"). In particular, a user type named like a container that
+  derefs to a string, inside a generic struct whose where-clause bounds it
+  without naming `Target`, gets only the `Some` check: the derive cannot
+  isolate a type that mentions a type parameter.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator
