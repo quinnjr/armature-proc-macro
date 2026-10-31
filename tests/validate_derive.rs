@@ -672,3 +672,33 @@ fn required_on_boxed_generic_string_wrapper() {
     };
     assert_eq!(fields(&s.validate().unwrap_err()), ["f"]);
 }
+
+/// A where-clause can change a concrete type's impls inside the generic
+/// `validate()`; such a field is checked as generic, not specialised.
+#[test]
+fn required_on_where_bounded_concrete_type() {
+    struct Foo(String);
+    impl std::ops::Deref for Foo {
+        type Target = String;
+        fn deref(&self) -> &String {
+            &self.0
+        }
+    }
+    impl AsRef<str> for Foo {
+        fn as_ref(&self) -> &str {
+            &self.0
+        }
+    }
+    #[derive(Validate)]
+    struct S<T>
+    where
+        Foo: std::ops::Deref<Target = T>,
+    {
+        #[validate(required)]
+        a: Option<Foo>,
+    }
+    let s: S<String> = S {
+        a: Some(Foo(String::new())),
+    };
+    assert_eq!(fields(&s.validate().unwrap_err()), ["a"]);
+}

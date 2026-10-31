@@ -112,7 +112,11 @@ these fixes only once `armature-validation` depends on this release.
     that is never a string (`Vec<T>`, maps, sets, `Result`, tuples, arrays,
     slices — also behind a pointer) means "is `Some`"; any other type
     mentioning a type or const parameter, or `Self` (`Wrapper<T>`,
-    `Pin<Box<T>>`, `C<N>`), must be `AsRef<str>` under its pointer layers.
+    `Pin<Box<T>>`, `C<N>`), must be `AsRef<str>` under its pointer layers,
+    as must a concrete type a where-clause bounds. `Pin<..>` and type
+    aliases are not seen through, so in practice they need `custom`; a
+    user impl of `AsRef<str>` for `Box<W<T>>` itself no longer suffices
+    (`W<T>` must be `AsRef<str>`).
     These fail to compile, with a message pointing to `custom` for a
     presence-only check, rather than skip the check. (The message uses
     `#[diagnostic::on_unimplemented]`, which a `#![no_implicit_prelude]`

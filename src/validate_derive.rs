@@ -6,7 +6,7 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
-use quote::{format_ident, quote, quote_spanned};
+use quote::{ToTokens, format_ident, quote, quote_spanned};
 use syn::{
     Data, DeriveInput, Expr, Fields, GenericArgument, LitInt, LitStr, Path, PathArguments, Type,
     ext::IdentExt, parse_macro_input, spanned::Spanned,
@@ -110,6 +110,18 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .chain(generics.const_params().map(|p| p.ident.clone()))
         .collect();
     let mut needs_generic_helper = false;
+    // Types a where-clause bounds: their trait impls inside the generic
+    // `validate()` follow the clause (`where Foo: Deref<Target = T>`), so
+    // specialisation must not be trusted for them either.
+    let where_bounded: Vec<String> = generics
+        .where_clause
+        .iter()
+        .flat_map(|w| &w.predicates)
+        .filter_map(|p| match p {
+            syn::WherePredicate::Type(t) => Some(t.bounded_ty.to_token_stream().to_string()),
+            _ => None,
+        })
+        .collect();
 
     for field in fields {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -249,7 +261,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
         let optional = match inner {
             None => Optional::No,
-            Some(inner) => classify_optional(inner, &type_params, &generic_params),
+            Some(inner) => {
+                let (core, layers) = peel_pointers(inner);
+                if where_bounded.contains(&core.to_token_stream().to_string())
+                    || where_bounded.contains(&inner.to_token_stream().to_string())
+                {
+                    Optional::Generic(layers)
+                } else {
+                    classify_optional(inner, &type_params, &generic_params)
+                }
+            }
         };
         needs_not_empty_helpers |= required && optional == Optional::Concrete;
         needs_generic_helper |= required && matches!(optional, Optional::Generic(_));
@@ -702,7 +723,7 @@ fn generic_required_helper() -> TokenStream2 {
         #[diagnostic::on_unimplemented(
             message = "`#[validate(required)]` on an `Option` of `{Self}` needs `{Self}: AsRef<str>`",
             label = "the derive cannot tell whether this generic type is a string",
-            note = "make `{Self}` implement `AsRef<str>` (for a type parameter, bound it), or use `custom` for a presence-only check"
+            note = "use `custom` for a presence-only check, or, if `{Self}` is a string, make it `AsRef<str>` (for a type parameter, bound it)"
         )]
         trait __ArmatureRequiredStr {
             fn __armature_str(&self) -> &str;

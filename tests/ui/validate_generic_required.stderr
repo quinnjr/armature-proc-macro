@@ -7,7 +7,7 @@ error[E0277]: `#[validate(required)]` on an `Option` of `T` needs `T: AsRef<str>
 7 |     #[validate(required)]
   |                -------- required by a bound introduced by this call
   |
-  = note: make `T` implement `AsRef<str>` (for a type parameter, bound it), or use `custom` for a presence-only check
+  = note: use `custom` for a presence-only check, or, if `T` is a string, make it `AsRef<str>` (for a type parameter, bound it)
 note: required for `T` to implement `<Named<T> as Validate>::validate::__ArmatureRequiredStr`
  --> tests/ui/validate_generic_required.rs:5:10
   |
@@ -35,7 +35,7 @@ help: the trait `AsRef<str>` is not implemented for `Wrapper<T>`
    |
 13 | struct Wrapper<T>(T);
    | ^^^^^^^^^^^^^^^^^
-   = note: make `Wrapper<T>` implement `AsRef<str>` (for a type parameter, bound it), or use `custom` for a presence-only check
+   = note: use `custom` for a presence-only check, or, if `Wrapper<T>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
 note: required for `Wrapper<T>` to implement `<Wrapped<T> as Validate>::validate::__ArmatureRequiredStr`
   --> tests/ui/validate_generic_required.rs:15:10
    |
@@ -59,7 +59,7 @@ help: the trait `AsRef<str>` is not implemented for `N<T>`
    |
 28 | struct N<T>(T);
    | ^^^^^^^^^^^
-   = note: make `N<T>` implement `AsRef<str>` (for a type parameter, bound it), or use `custom` for a presence-only check
+   = note: use `custom` for a presence-only check, or, if `N<T>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
 note: required for `N<T>` to implement `<HiddenByMacro<T> as Validate>::validate::__ArmatureRequiredStr`
   --> tests/ui/validate_generic_required.rs:30:10
    |
