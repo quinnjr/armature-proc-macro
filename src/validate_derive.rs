@@ -100,6 +100,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let locals = Locals::new();
 
     let mut field_checks: Vec<TokenStream2> = Vec::new();
+    let mut needs_not_empty_helpers = false;
 
     for field in fields {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -136,12 +137,18 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     "length" => {
                         let (min, max) = parse_min_max(&meta)?;
                         reject_inverted(&meta, &min, &max)?;
+                        if min.is_none() && max.is_none() {
+                            return Err(meta.error("`length` needs `min`, `max` or both"));
+                        }
                         push(Check::Length { min, max });
                         Ok(())
                     }
                     "range" => {
                         let (min, max) = parse_min_max(&meta)?;
                         reject_inverted(&meta, &min, &max)?;
+                        if min.is_none() && max.is_none() {
+                            return Err(meta.error("`range` needs `min`, `max` or both"));
+                        }
                         push(Check::Range { min, max });
                         Ok(())
                     }
@@ -223,13 +230,10 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
         let inner = option_inner(&field.ty);
         let required = checks.iter().any(|r| matches!(r.check, Check::Required));
-        // `required` on an `Option` of a number, `bool` or `char` means only
-        // "is `Some`"; on any other type it also checks emptiness.
-        let string_like = !inner.is_some_and(is_known_non_string);
+        needs_not_empty_helpers |= required && inner.is_some();
         let access = quote! { self.#field_ident };
         let (whole, mut unwrapped): (Vec<Rule>, Vec<Rule>) = checks
             .into_iter()
-            .filter(|r| string_like || !matches!(r.check, Check::Required))
             .partition(|r| matches!(r.check, Check::Custom { .. }));
         // `length` first, so a value over its maximum is not then scanned by
         // `email`, `url` and `regex`.
@@ -238,13 +242,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let emit = |rules: Vec<Rule>| -> Vec<TokenStream2> {
             rules
                 .into_iter()
-                .map(|rule| emit_check(&krate, &locals, &field_name, rule))
+                .map(|rule| emit_check(&krate, &locals, &field_name, rule, inner.is_some()))
                 .collect()
         };
         let (whole, body) = (emit(whole), emit(unwrapped));
         let too_long = &locals.too_long;
         let body = quote! {
-            #[allow(unused_variables)]
             let #too_long = false;
             #(#body)*
         };
@@ -298,10 +301,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     }
 
     let errors = &locals.errors;
+    let helpers = needs_not_empty_helpers.then(|| not_empty_helpers(&krate));
     Ok(quote! {
         #[automatically_derived]
         impl #impl_generics #krate::Validate for #name #ty_generics #where_clause {
             fn validate(&self) -> ::std::result::Result<(), ::std::vec::Vec<#krate::ValidationError>> {
+                #helpers
                 let mut #errors: ::std::vec::Vec<#krate::ValidationError> = ::std::vec::Vec::new();
                 #(#field_checks)*
                 if #errors.is_empty() {
@@ -312,40 +317,6 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             }
         }
     })
-}
-
-/// Whether a type is certainly not a string: a primitive number, `bool` or
-/// `char`. `required` on an `Option` of such a type checks only "is `Some`".
-/// Anything else keeps the emptiness check, so an unrecognised string type
-/// (`Box<str>`, `Arc<str>`, an alias, a newtype that derefs to `str`) is
-/// still checked, and a non-string one is a compile error rather than a
-/// silently weaker rule.
-fn is_known_non_string(ty: &Type) -> bool {
-    match ty {
-        Type::Group(g) => is_known_non_string(&g.elem),
-        Type::Paren(p) => is_known_non_string(&p.elem),
-        Type::Path(p) if p.qself.is_none() => p.path.get_ident().is_some_and(|i| {
-            matches!(
-                i.to_string().as_str(),
-                "u8" | "u16"
-                    | "u32"
-                    | "u64"
-                    | "u128"
-                    | "usize"
-                    | "i8"
-                    | "i16"
-                    | "i32"
-                    | "i64"
-                    | "i128"
-                    | "isize"
-                    | "f32"
-                    | "f64"
-                    | "bool"
-                    | "char"
-            )
-        }),
-        _ => false,
-    }
 }
 
 /// `T` if `ty` is written as `Option<T>` (or a path ending in `Option<T>`).
@@ -593,7 +564,45 @@ fn anchored(pattern: &str) -> String {
     format!(r"\A(?:{pattern})\z")
 }
 
-fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rule) -> TokenStream2 {
+/// Helpers for `required` on an `Option<T>` field, emitted once at the top of
+/// `validate()` when needed. Autoref specialisation picks the emptiness check
+/// when `T: AsRef<str>` (`String`, `Box<str>`, `Arc<str>`, `Cow<str>`, …) and
+/// only the `Some` check otherwise (a number, a `Uuid`, a nested struct), so
+/// the choice follows the type rather than a guess from its name.
+fn not_empty_helpers(krate: &TokenStream2) -> TokenStream2 {
+    quote! {
+        struct __ArmatureNotEmpty<'a, T: ?::core::marker::Sized>(&'a T);
+        trait __ArmatureStrNotEmpty {
+            fn __armature_check(&self, field: &str)
+                -> ::std::option::Option<#krate::ValidationError>;
+        }
+        impl<T: ?::core::marker::Sized + ::core::convert::AsRef<str>> __ArmatureStrNotEmpty
+            for __ArmatureNotEmpty<'_, T>
+        {
+            fn __armature_check(&self, field: &str)
+                -> ::std::option::Option<#krate::ValidationError>
+            {
+                #krate::NotEmpty::validate(self.0.as_ref(), field).err()
+            }
+        }
+        trait __ArmatureAnyNotEmpty {
+            fn __armature_check(&self, _field: &str)
+                -> ::std::option::Option<#krate::ValidationError>
+            {
+                ::std::option::Option::None
+            }
+        }
+        impl<T: ?::core::marker::Sized> __ArmatureAnyNotEmpty for &__ArmatureNotEmpty<'_, T> {}
+    }
+}
+
+fn emit_check(
+    krate: &TokenStream2,
+    locals: &Locals,
+    field_name: &str,
+    rule: Rule,
+    optional: bool,
+) -> TokenStream2 {
     let Rule { check, span } = rule;
     let Locals {
         errors,
@@ -633,7 +642,6 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
                 // Shadows the flag rather than assigning it, so the generated
                 // code has no `let mut` + `if` for user lints to flag.
                 quote! {
-                    #[allow(unused_variables)]
                     let #too_long = if let ::std::result::Result::Err(mut #error) = #call {
                         #error.value = ::std::option::Option::None;
                         #errors.push(#error);
@@ -739,6 +747,17 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
                 }
             })
         }
+        // On an `Option` field (this branch runs for `Some`), emptiness is
+        // checked only when the inner type is a string; see
+        // `not_empty_helpers`.
+        Check::Required if optional => quote! {
+            if let ::std::option::Option::Some(mut #error) =
+                (&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
+            {
+                #error.value = ::std::option::Option::None;
+                #errors.push(#error);
+            }
+        },
         Check::Required => {
             push_builtin(quote_spanned! {span=> #krate::NotEmpty::validate(#at_rule, #field_name) })
         }

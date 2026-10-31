@@ -3,6 +3,7 @@
 //!
 //! Strict lints, so CI's clippy run also covers the generated code.
 #![deny(clippy::pedantic, clippy::nursery)]
+#![forbid(unused_variables)]
 // Lints on the tests' own code, not the generated code.
 #![allow(
     clippy::missing_errors_doc,
@@ -313,59 +314,6 @@ fn raw_identifier_fields_are_reported_unraw() {
     assert!(errors[0].message.starts_with("type "));
 }
 
-/// Generated locals cannot be reached from user expressions: a `custom`
-/// closure naming `__armature_errors` refers to the user's own item, so it
-/// cannot clear the derive's error list.
-#[test]
-fn custom_closures_cannot_reach_generated_locals() {
-    let calls = std::cell::Cell::new(0);
-    let __armature_errors = &calls;
-    let _ = __armature_errors;
-    #[derive(Validate)]
-    struct S {
-        #[validate(length(min = 5))]
-        a: String,
-        #[validate(
-            custom = "|_: &String| -> Result<(), ValidationError> { let __armature_errors: Vec<u8> = Vec::new(); drop(__armature_errors); Ok(()) }"
-        )]
-        b: String,
-    }
-    let errors = S {
-        a: "x".into(),
-        b: String::new(),
-    }
-    .validate()
-    .unwrap_err();
-    assert_eq!(fields(&errors), ["a"]);
-}
-
-#[test]
-fn generated_locals_are_hygienic() {
-    #[allow(non_upper_case_globals)]
-    const errors: u8 = 0;
-    #[allow(non_upper_case_globals)]
-    const e: u8 = 0;
-    let _ = (errors, e);
-    #[derive(Validate)]
-    struct S {
-        #[validate(length(min = 2))]
-        a: String,
-        #[validate(range(min = 1))]
-        b: u8,
-    }
-    assert_eq!(
-        fields(
-            &S {
-                a: "x".into(),
-                b: 0
-            }
-            .validate()
-            .unwrap_err()
-        ),
-        ["a", "b"]
-    );
-}
-
 fn must_be_some(v: &Option<u32>) -> Result<(), ValidationError> {
     if v.is_some() {
         Ok(())
@@ -375,7 +323,7 @@ fn must_be_some(v: &Option<u32>) -> Result<(), ValidationError> {
 }
 
 /// `custom` gets the whole field, `Option` included, so it still runs on
-/// `None`; `required` on a non-string `Option` means "is `Some`".
+/// `None`; `required` on an `Option` of a non-string type means "is `Some`".
 #[test]
 fn option_fields_keep_custom_and_required_semantics() {
     #[derive(Validate)]
@@ -508,4 +456,35 @@ fn required_on_optional_string_types_checks_emptiness() {
         c: Some(' '),
     };
     assert_eq!(fields(&empty.validate().unwrap_err()), ["a", "b"]);
+}
+
+/// `required` on an `Option` of a non-string type compiles and means
+/// "is `Some`", whatever the type: the emptiness check is chosen by whether
+/// the inner type is `AsRef<str>`, not by its name.
+#[test]
+fn required_on_optional_non_string_types_means_some() {
+    #[derive(Debug)]
+    struct Uuid([u8; 16]);
+    #[derive(Validate)]
+    struct S {
+        #[validate(required)]
+        id: Option<Uuid>,
+        #[validate(required)]
+        bytes: Option<Vec<u8>>,
+        #[validate(required)]
+        n: Option<std::primitive::u32>,
+    }
+    let none = S {
+        id: None,
+        bytes: None,
+        n: None,
+    };
+    assert_eq!(fields(&none.validate().unwrap_err()), ["id", "bytes", "n"]);
+    let some = S {
+        id: Some(Uuid([0; 16])),
+        bytes: Some(Vec::new()),
+        n: Some(0),
+    };
+    assert!(some.validate().is_ok());
+    let _ = some.id.map(|u| u.0);
 }

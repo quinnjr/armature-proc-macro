@@ -71,8 +71,9 @@ these fixes only once `armature-validation` depends on this release.
   expression once. A one-sided float bound admits infinity (`range(min =
   0.01)` accepts `inf`); give both bounds to exclude it.
 - A type error from a `length`, `email`, `url`, `regex`, `required`,
-  `custom` or nested rule (`email` on a `u32`) points at the rule, not at
-  `#[derive(Validate)]`. A `range` comparison error still points at the
+  or nested rule (`email` on a `u32`), and a `custom` argument-type
+  mismatch, point at the rule, not at `#[derive(Validate)]`. A `range`
+  comparison error or a `custom` return-type mismatch still points at the
   derive.
 - Error order within a field changed: `custom` errors come first, then
   `length`, then the other rules in the order written.
@@ -96,9 +97,10 @@ these fixes only once `armature-validation` depends on this release.
 
 - `Option<T>` fields (detected syntactically; a type alias is not seen
   through): built-in rules and `nested` apply to the value when it is `Some`
-  and are skipped for `None`; `required` also rejects `None` (and on an
-  `Option` of a number, `bool` or `char` means only "is `Some`"; any other
-  inner type keeps the emptiness check). `custom` validators still get
+  and are skipped for `None`; `required` also rejects `None` (and checks
+  emptiness only when the inner type is `AsRef<str>` — `String`, `Box<str>`,
+  `Arc<str>`, `Cow<str>` and the like — so `required` on `Option<u32>` or
+  `Option<Uuid>` means "is `Some`"). `custom` validators still get
   the whole `&Option<T>`, as before, so they can act on `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).

@@ -1,0 +1,25 @@
+error[E0425]: cannot find value `__armature_value` in this scope
+ --> tests/ui/validate_hygiene.rs:9:28
+  |
+9 |     #[validate(range(max = __armature_value))]
+  |                            ^^^^^^^^^^^^^^^^ not found in this scope
+  |
+help: an identifier with the same name is defined here, but is not accessible due to macro hygiene
+ --> tests/ui/validate_hygiene.rs:7:10
+  |
+7 | #[derive(Validate)]
+  |          ^^^^^^^^
+  = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0425]: cannot find value `__armature_errors` in this scope
+  --> tests/ui/validate_hygiene.rs:15:25
+   |
+15 |     #[validate(custom = "|_: &String| -> Result<(), armature_validation::ValidationError> { __armature_errors.clear(); Ok(()) }")]
+   |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ not found in this scope
+   |
+help: an identifier with the same name is defined here, but is not accessible due to macro hygiene
+  --> tests/ui/validate_hygiene.rs:13:10
+   |
+13 | #[derive(Validate)]
+   |          ^^^^^^^^
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)

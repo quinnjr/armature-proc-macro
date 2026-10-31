@@ -37,4 +37,10 @@ struct BoundlessRange {
     a: u8,
 }
 
+#[derive(Validate)]
+struct BoundlessLength {
+    #[validate(length())]
+    a: String,
+}
+
 fn main() {}

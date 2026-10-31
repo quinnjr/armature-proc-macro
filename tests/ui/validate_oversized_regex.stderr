@@ -1,0 +1,5 @@
+error: invalid regex pattern: Compiled regex exceeds size limit of 10485760 bytes.
+ --> tests/ui/validate_oversized_regex.rs:7:24
+  |
+7 |     #[validate(regex = r"\w{300}")]
+  |                        ^^^^^^^^^^

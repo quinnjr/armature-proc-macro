@@ -6,9 +6,11 @@ struct WrongType {
     #[validate(email)]
     a: u32,
     #[validate(range(min = 1))]
-    b: String,
+    b: Unit,
     #[validate]
     c: u32,
 }
+
+struct Unit;
 
 fn main() {}

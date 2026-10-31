@@ -6,9 +6,3 @@ error: invalid regex pattern: regex parse error:
   |
 5 |     #[validate(regex = "[a-z")]
   |                        ^^^^^^
-
-error: invalid regex pattern: Compiled regex exceeds size limit of 10485760 bytes.
-  --> tests/ui/validate_bad_regex.rs:12:24
-   |
-12 |     #[validate(regex = r"\w{300}")]
-   |                        ^^^^^^^^^^

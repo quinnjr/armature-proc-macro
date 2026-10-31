@@ -33,3 +33,9 @@ error: unexpected end of input, expected nested attribute
    |
 36 |     #[validate(range())]
    |                      ^
+
+error: unexpected end of input, expected nested attribute
+  --> tests/ui/validate_bad_rules.rs:42:23
+   |
+42 |     #[validate(length())]
+   |                       ^
