@@ -747,10 +747,14 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
         // Its value is cleared like a built-in rule's: a custom function that
         // calls a built-in validator would otherwise pass the value on.
         Check::Custom { func, with_field } => {
+            // The call itself stays at the macro's span (so lints such as
+            // `redundant_closure_call` treat it as generated code, which an
+            // inline `custom = "|v| ..."` closure is); only the argument is
+            // located at the rule, which is where a signature mismatch shows.
             let call = if with_field {
-                quote_spanned! {span=> (#func)(#at_rule, #field_name) }
+                quote! { (#func)(#at_rule, #field_name) }
             } else {
-                quote_spanned! {span=> (#func)(#at_rule) }
+                quote! { (#func)(#at_rule) }
             };
             // The error type is named, so a function generic over it
             // (`fn f<E: From<ValidationError>>(..) -> Result<(), E>`) still
