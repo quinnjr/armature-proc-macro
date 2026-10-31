@@ -109,7 +109,10 @@ these fixes only once `armature-validation` depends on this release.
   requires that core type to be `AsRef<str>`; a container that is never a
   string (`Vec<T>`, maps, sets, `Option`, tuples, arrays) means "is `Some`";
   any other type mentioning a parameter (`Wrapper<T>`, `Pin<Box<T>>`) must
-  itself be `AsRef<str>`. `required` on `Option<Option<_>>` is a compile error. `custom`
+  itself be `AsRef<str>`. These fail to compile rather than skip the check;
+  for a presence-only check on a non-string generic (`Option<C>` with a
+  numeric `C`), use `custom`. `Box`, `Arc`, `Rc` and `Cow` are recognised by
+  name, so a user type with one of those names must implement `Deref`. `required` on `Option<Option<_>>` is a compile error. `custom`
   validators still get the whole `&Option<T>`, as before, so they can act on
   `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,

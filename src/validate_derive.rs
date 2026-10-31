@@ -577,14 +577,16 @@ fn anchored(pattern: &str) -> String {
     format!(r"\A(?:{pattern})\z")
 }
 
-/// Whether a field is an `Option`, and if so whether its inner type mentions
-/// one of the struct's type parameters.
+/// Whether a field is an `Option`, and if so how `required` checks its inner
+/// type: through specialisation (`Concrete`), or, for a generic inner type
+/// that might be a string, by requiring `AsRef<str>` (`Generic`). See
+/// `classify_optional`.
 #[derive(Clone, Copy, PartialEq)]
 enum Optional {
     No,
     Concrete,
-    /// The inner type is a type parameter (or an associated type of one),
-    /// possibly behind this many `&`/`Box`/`Arc`/`Rc` layers.
+    /// Requires `AsRef<str>` of the inner type's core, under this many
+    /// `&`/`Box`/`Arc`/`Rc`/`Cow` layers (0: of the whole inner type).
     Generic(usize),
 }
 
