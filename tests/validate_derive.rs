@@ -824,3 +824,50 @@ fn required_with_macro_types_and_partial_lifetimes() {
     assert_eq!(fields(&g.validate().unwrap_err()), ["name"]);
     let _ = g.other;
 }
+
+/// A true where-clause type predicate in a struct without type parameters
+/// (`&'a Foo: Deref`, no `Target`) would shadow the real impl and drop the
+/// in-place check to "is `Some`"; such structs isolate the check too.
+#[test]
+fn required_with_where_type_predicates_and_no_type_params() {
+    use std::sync::Arc;
+    struct Foo(String);
+    impl std::ops::Deref for Foo {
+        type Target = String;
+        fn deref(&self) -> &String {
+            &self.0
+        }
+    }
+    #[derive(Validate)]
+    struct L<'a>
+    where
+        &'a Foo: std::ops::Deref,
+        Arc<&'a String>: std::ops::Deref,
+    {
+        #[validate(required)]
+        a: Option<&'a Foo>,
+        #[validate(required)]
+        b: Option<Arc<&'a String>>,
+    }
+    let foo = Foo(String::new());
+    let empty = String::new();
+    let l = L {
+        a: Some(&foo),
+        b: Some(Arc::new(&empty)),
+    };
+    assert_eq!(fields(&l.validate().unwrap_err()), ["a", "b"]);
+
+    #[derive(Validate)]
+    #[allow(single_use_lifetimes)]
+    struct N
+    where
+        for<'x> &'x Foo: std::ops::Deref,
+    {
+        #[validate(required)]
+        a: Option<&'static Foo>,
+    }
+    let n = N {
+        a: Some(Box::leak(Box::new(Foo(String::new())))),
+    };
+    assert_eq!(fields(&n.validate().unwrap_err()), ["a"]);
+}

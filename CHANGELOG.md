@@ -113,10 +113,13 @@ these fixes only once `armature-validation` depends on this release.
     slices — also behind a pointer) means "is `Some`"; any other type
     mentioning a type or const parameter, or `Self` (`Wrapper<T>`,
     `Pin<Box<T>>`, `C<N>`), must be `AsRef<str>` under its pointer layers.
-    In a struct with type or const parameters, a concrete inner type that
-    mentions none of them is checked in a nested function that declares
-    only the lifetimes it uses, so the struct's type parameters and
-    where-clauses cannot change which check applies. `Pin<..>` and type aliases are not
+    In a struct with type or const parameters or a where-clause type
+    predicate, a concrete inner type that mentions no type or const
+    parameter is checked in a nested function that declares only the
+    lifetimes it uses (with their outlives bounds), so the struct's type
+    parameters and where-clauses cannot change which check applies; in such
+    a struct without type parameters, an inner type naming `Self` or using a
+    type macro must be `AsRef<str>`. `Pin<..>` and type aliases are not
     seen through, so in practice they need `custom`; a user impl of
     `AsRef<str>` for `Box<W<T>>` itself no longer suffices (`W<T>` must be
     `AsRef<str>`). These fail to compile, with a message pointing to

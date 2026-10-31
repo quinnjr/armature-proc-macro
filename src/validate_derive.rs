@@ -110,6 +110,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         .chain(generics.const_params().map(|p| p.ident.clone()))
         .collect();
     let mut needs_generic_helper = false;
+    // A where-clause type predicate can steer the in-place check even with
+    // no type parameters: a true `&'a Foo: Deref` (no `Target`) shadows the
+    // real impl, leaves `Target` unknown and drops to the "is `Some`"
+    // fallback. Lifetime predicates cannot change which impl applies.
+    let has_type_predicate = generics
+        .where_clause
+        .iter()
+        .flat_map(|w| &w.predicates)
+        .any(|p| matches!(p, syn::WherePredicate::Type(_)));
+    let needs_isolation = !generic_params.is_empty() || has_type_predicate;
 
     for field in fields {
         let field_ident = field.ident.as_ref().expect("named field");
@@ -249,6 +259,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         }
         let optional = match inner {
             None => Optional::No,
+            // A struct with where-clause type predicates but no type or const
+            // parameters must isolate, and a nested fn cannot name `Self` or
+            // see into a type macro: such a type fails closed.
+            Some(inner)
+                if has_type_predicate
+                    && generic_params.is_empty()
+                    && mentions_self_or_macro(inner) =>
+            {
+                Optional::Generic(peel_pointers(inner).1)
+            }
             Some(inner) => classify_optional(inner, &type_params, &generic_params),
         };
         needs_not_empty_helpers |= required && optional == Optional::Concrete;
@@ -266,13 +286,13 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // generics nor its where-clauses, so specialisation there sees the
         // type's real impls (a `where Foo: Deref<Target = T>` cannot steer
         // it), whatever path or alias the type is written with.
-        // Only a struct with type or const parameters needs this: without
-        // them a where-clause can only restate the real impls, so the check
-        // in place is already exact (and a type macro or `Self` there, which
-        // a nested fn could not name, is no problem). In a generic struct a
-        // macro or `Self` counts as generic and never reaches here.
+        // Needed when the struct has type or const parameters or a
+        // where-clause type predicate; without any, the check in place is
+        // exact (and a type macro or `Self` there, which a nested fn could
+        // not name, is no problem). Where isolation is needed, a macro or
+        // `Self` is classified generic and never reaches here.
         let isolated = (optional == Optional::Concrete
-            && !generic_params.is_empty()
+            && needs_isolation
             && inner.is_some_and(|i| !mentions_type_param(i, &generic_params)))
         .then_some(inner)
         .flatten();
@@ -825,18 +845,29 @@ fn nested_lifetimes(generics: &syn::Generics, ty: &Type) -> TokenStream2 {
     }
     let mut used = Used(Vec::new());
     syn::visit::Visit::visit_type(&mut used, ty);
+    let keep = |b: &syn::Lifetime| b.ident == "static" || used.0.contains(&b.ident);
+    // Outlives bounds written in the where-clause, by lifetime.
+    let where_bounds: Vec<&syn::PredicateLifetime> = generics
+        .where_clause
+        .iter()
+        .flat_map(|w| &w.predicates)
+        .filter_map(|p| match p {
+            syn::WherePredicate::Lifetime(l) => Some(l),
+            _ => None,
+        })
+        .collect();
     let params: Vec<syn::LifetimeParam> = generics
         .lifetimes()
         .filter(|p| used.0.contains(&p.lifetime.ident))
         .map(|p| {
             let mut p = p.clone();
             p.attrs.clear();
-            p.bounds = p
-                .bounds
-                .iter()
-                .filter(|b| used.0.contains(&b.ident))
-                .cloned()
-                .collect();
+            let mut bounds: Vec<syn::Lifetime> =
+                p.bounds.iter().filter(|b| keep(b)).cloned().collect();
+            for pred in where_bounds.iter().filter(|w| w.lifetime == p.lifetime) {
+                bounds.extend(pred.bounds.iter().filter(|b| keep(b)).cloned());
+            }
+            p.bounds = bounds.into_iter().collect();
             p.colon_token = (!p.bounds.is_empty()).then(Default::default);
             p
         })
@@ -846,6 +877,27 @@ fn nested_lifetimes(generics: &syn::Generics, ty: &Type) -> TokenStream2 {
     } else {
         quote! { <#(#params),*> }
     }
+}
+
+/// Whether `ty` mentions `Self` or contains a type macro.
+fn mentions_self_or_macro(ty: &Type) -> bool {
+    struct Finder(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Finder {
+        fn visit_macro(&mut self, _: &'ast syn::Macro) {
+            self.0 = true;
+        }
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            if path.leading_colon.is_none()
+                && path.segments.first().is_some_and(|s| s.ident == "Self")
+            {
+                self.0 = true;
+            }
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let mut finder = Finder(false);
+    syn::visit::Visit::visit_type(&mut finder, ty);
+    finder.0
 }
 
 /// Whether `ty` mentions any of `params` (the struct's type parameters).
