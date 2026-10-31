@@ -98,9 +98,10 @@ these fixes only once `armature-validation` depends on this release.
 - `Option<T>` fields (detected syntactically; a type alias is not seen
   through): built-in rules and `nested` apply to the value when it is `Some`
   and are skipped for `None`; `required` also rejects `None` (and checks
-  emptiness only when the inner type is `AsRef<str>` — `String`, `Box<str>`,
-  `Arc<str>`, `Cow<str>` and the like — so `required` on `Option<u32>` or
-  `Option<Uuid>` means "is `Some`"; on an `Option` of a type parameter it
+  emptiness when the inner type is, or derefs to, an `AsRef<str>` type —
+  `String`, `Box<str>`, `Arc<str>`, `Cow<str>`, `Arc<String>`,
+  `Box<String>`, a `Deref<Target = str>` newtype — so `required` on
+  `Option<u32>` or `Option<Uuid>` means "is `Some`"; on an `Option` of a type parameter it
   requires `T: AsRef<str>`, since the type is not known when the derive
   expands). `custom` validators still get
   the whole `&Option<T>`, as before, so they can act on `None`.

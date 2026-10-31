@@ -605,34 +605,50 @@ fn mentions_type_param(ty: &Type, params: &[syn::Ident]) -> bool {
 }
 
 /// Helpers for `required` on an `Option<T>` field, emitted once at the top of
-/// `validate()` when needed. Autoref specialisation picks the emptiness check
-/// when `T: AsRef<str>` (`String`, `Box<str>`, `Arc<str>`, `Cow<str>`, …) and
-/// only the `Some` check otherwise (a number, a `Uuid`, a nested struct), so
-/// the choice follows the type rather than a guess from its name.
+/// `validate()` when needed. Autoref specialisation picks, in order:
+///
+/// 1. the emptiness check when `T: AsRef<str>` (`String`, `&str`, `Box<str>`,
+///    `Arc<str>`, `Cow<str>`, an `AsRef<str>` newtype);
+/// 2. the emptiness check through `Deref` when `T::Target: AsRef<str>`
+///    (`Arc<String>`, `Box<String>`, `Rc<String>`, a `Deref<Target = str>`
+///    newtype);
+/// 3. only the `Some` check otherwise (a number, a `Uuid`, a nested struct).
+///
+/// Method lookup on `&&__ArmatureNotEmpty(v)` tries `Self = &W` first, then
+/// `Self = &&W` (autoref), then `Self = W` (after one deref), so the three
+/// impls sit on `&W`, `&&W` and `W` respectively.
 fn not_empty_helpers(krate: &TokenStream2) -> TokenStream2 {
+    let ret = quote! { ::std::option::Option<#krate::ValidationError> };
     quote! {
         struct __ArmatureNotEmpty<'a, T: ?::core::marker::Sized>(&'a T);
         trait __ArmatureStrNotEmpty {
-            fn __armature_check(&self, field: &str)
-                -> ::std::option::Option<#krate::ValidationError>;
+            fn __armature_check(&self, field: &str) -> #ret;
         }
         impl<T: ?::core::marker::Sized + ::core::convert::AsRef<str>> __ArmatureStrNotEmpty
-            for __ArmatureNotEmpty<'_, T>
+            for &__ArmatureNotEmpty<'_, T>
         {
-            fn __armature_check(&self, field: &str)
-                -> ::std::option::Option<#krate::ValidationError>
-            {
+            fn __armature_check(&self, field: &str) -> #ret {
                 #krate::NotEmpty::validate(self.0.as_ref(), field).err()
             }
         }
+        trait __ArmatureDerefNotEmpty {
+            fn __armature_check(&self, field: &str) -> #ret;
+        }
+        impl<T> __ArmatureDerefNotEmpty for &&__ArmatureNotEmpty<'_, T>
+        where
+            T: ?::core::marker::Sized + ::core::ops::Deref,
+            T::Target: ::core::convert::AsRef<str>,
+        {
+            fn __armature_check(&self, field: &str) -> #ret {
+                #krate::NotEmpty::validate((**self.0).as_ref(), field).err()
+            }
+        }
         trait __ArmatureAnyNotEmpty {
-            fn __armature_check(&self, _field: &str)
-                -> ::std::option::Option<#krate::ValidationError>
-            {
+            fn __armature_check(&self, _field: &str) -> #ret {
                 ::std::option::Option::None
             }
         }
-        impl<T: ?::core::marker::Sized> __ArmatureAnyNotEmpty for &__ArmatureNotEmpty<'_, T> {}
+        impl<T: ?::core::marker::Sized> __ArmatureAnyNotEmpty for __ArmatureNotEmpty<'_, T> {}
     }
 }
 
@@ -800,7 +816,7 @@ fn emit_check(
         }),
         Check::Required if optional == Optional::Concrete => quote! {
             if let ::std::option::Option::Some(mut #error) =
-                (&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
+                (&&__ArmatureNotEmpty(#value)).__armature_check(#field_name)
             {
                 #error.value = ::std::option::Option::None;
                 #errors.push(#error);

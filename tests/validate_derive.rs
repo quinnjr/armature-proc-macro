@@ -9,6 +9,9 @@
     clippy::missing_errors_doc,
     clippy::unnecessary_wraps,
     clippy::items_after_statements,
+    // Field types chosen to exercise `required` on string-like smart pointers.
+    clippy::box_collection,
+    clippy::struct_field_names,
     // `custom` validators take `&Field` by the derive's contract.
     clippy::ref_option,
     clippy::trivially_copy_pass_by_ref
@@ -456,6 +459,47 @@ fn required_on_optional_string_types_checks_emptiness() {
         c: Some(' '),
     };
     assert_eq!(fields(&empty.validate().unwrap_err()), ["a", "b"]);
+
+    // Types that only deref to a string take the `Deref` level.
+    struct Name(String);
+    impl std::ops::Deref for Name {
+        type Target = str;
+        fn deref(&self) -> &str {
+            &self.0
+        }
+    }
+    #[derive(Validate)]
+    struct D {
+        #[validate(required)]
+        a: Option<Arc<String>>,
+        #[validate(required)]
+        b: Option<Box<String>>,
+        #[validate(required)]
+        c: Option<std::rc::Rc<String>>,
+        #[validate(required)]
+        d: Option<Name>,
+        #[validate(required)]
+        e: Option<&'static str>,
+    }
+    let empty = D {
+        a: Some(Arc::new(String::new())),
+        b: Some(Box::new(String::new())),
+        c: Some(std::rc::Rc::new(String::new())),
+        d: Some(Name(String::new())),
+        e: Some(""),
+    };
+    assert_eq!(
+        fields(&empty.validate().unwrap_err()),
+        ["a", "b", "c", "d", "e"]
+    );
+    let full = D {
+        a: Some(Arc::new("x".into())),
+        b: Some(Box::new("x".into())),
+        c: Some(std::rc::Rc::new("x".into())),
+        d: Some(Name("x".into())),
+        e: Some("x"),
+    };
+    assert!(full.validate().is_ok());
 }
 
 /// `required` on an `Option` of a non-string type compiles and means
