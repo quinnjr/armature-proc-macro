@@ -752,3 +752,32 @@ fn required_isolated_check_handles_lifetimes_and_self() {
     }
     assert!(Node { parent: None }.validate().is_err());
 }
+
+/// The isolated check keeps the struct's lifetimes: borrowed fields,
+/// higher-ranked types and `Self` in a lifetime-only struct all compile.
+#[test]
+fn required_isolated_check_keeps_lifetimes() {
+    use std::borrow::Cow;
+    #[derive(Validate)]
+    struct Comment<'a, 'b: 'a> {
+        #[validate(required)]
+        text: Option<Cow<'a, str>>,
+        #[validate(required)]
+        nested: Option<&'a &'b str>,
+        #[validate(required)]
+        parent: Option<Box<Self>>,
+        #[validate(required)]
+        hook: Option<for<'x> fn(&'x str)>,
+    }
+    fn noop(_: &str) {}
+    let c = Comment {
+        text: Some(Cow::Borrowed("")),
+        nested: Some(&""),
+        parent: None,
+        hook: Some(noop),
+    };
+    assert_eq!(
+        fields(&c.validate().unwrap_err()),
+        ["text", "nested", "parent"]
+    );
+}

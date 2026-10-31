@@ -113,16 +113,16 @@ these fixes only once `armature-validation` depends on this release.
     slices — also behind a pointer) means "is `Some`"; any other type
     mentioning a type or const parameter, or `Self` (`Wrapper<T>`,
     `Pin<Box<T>>`, `C<N>`), must be `AsRef<str>` under its pointer layers.
-    A concrete inner type is checked in a nested non-generic function, so
-    the struct's where-clauses cannot change which check applies. `Pin<..>`
-    and type
-    aliases are not seen through, so in practice they need `custom`; a
-    user impl of `AsRef<str>` for `Box<W<T>>` itself no longer suffices
-    (`W<T>` must be `AsRef<str>`).
-    These fail to compile, with a message pointing to `custom` for a
-    presence-only check, rather than skip the check. (The message uses
-    `#[diagnostic::on_unimplemented]`, which a `#![no_implicit_prelude]`
-    crate cannot resolve; such a crate should use `custom` there.);
+    A concrete inner type is checked in a nested function that declares
+    only the struct's lifetimes, so its type parameters and where-clauses
+    cannot change which check applies. `Pin<..>` and type aliases are not
+    seen through, so in practice they need `custom`; a user impl of
+    `AsRef<str>` for `Box<W<T>>` itself no longer suffices (`W<T>` must be
+    `AsRef<str>`). These fail to compile, with a message pointing to
+    `custom` for a presence-only check, rather than skip the check. (The
+    message uses `#[diagnostic::on_unimplemented]`, which a
+    `#![no_implicit_prelude]` crate cannot resolve; such a crate should use
+    `custom` there.)
   - on `Option<Option<_>>`, also behind `&`/`Box`/`Arc`/`Rc`/`Cow`/`Pin`,
     is a compile error.
 

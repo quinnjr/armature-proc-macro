@@ -268,8 +268,9 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // it), whatever path or alias the type is written with.
         let isolated = (optional == Optional::Concrete
             && inner.is_some_and(|i| !mentions_type_param(i, &generic_params)))
-        .then(|| inner.map(|i| isolate_type(i, name, generics.params.is_empty())))
+        .then(|| inner.map(|i| isolate_type(i, name, generics)))
         .flatten();
+        let nested = nested_lifetimes(generics);
         let emit = |rules: Vec<Rule>| -> Vec<TokenStream2> {
             rules
                 .into_iter()
@@ -280,7 +281,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                         &field_name,
                         rule,
                         optional,
-                        isolated.as_ref(),
+                        isolated.as_ref().map(|ty| (ty, &nested)),
                     )
                 })
                 .collect()
@@ -801,35 +802,62 @@ fn never_a_string(ty: &Type) -> bool {
     }
 }
 
-/// `ty` made valid as a nested fn's parameter type: lifetimes become `'_`
-/// (the struct's lifetimes are not in scope there; `'static` is kept), and
-/// `Self` becomes the struct's name, which only a non-generic struct reaches
-/// here.
-fn isolate_type(ty: &Type, name: &syn::Ident, non_generic: bool) -> Type {
+/// `ty` made valid as the nested fn's parameter type: `Self`, which a nested
+/// item cannot name, becomes the struct's name with its lifetime arguments
+/// (only structs without type or const parameters reach here). Lifetimes
+/// are kept as written: the nested fn declares the struct's lifetime
+/// parameters (see `nested_lifetimes`), and lifetimes cannot steer trait
+/// selection.
+fn isolate_type(ty: &Type, name: &syn::Ident, generics: &syn::Generics) -> Type {
     struct Isolate<'a> {
         name: &'a syn::Ident,
-        non_generic: bool,
+        lifetimes: Vec<syn::Lifetime>,
     }
     impl syn::visit_mut::VisitMut for Isolate<'_> {
-        fn visit_lifetime_mut(&mut self, lt: &mut syn::Lifetime) {
-            if lt.ident != "static" {
-                *lt = syn::Lifetime::new("'_", lt.span());
-            }
-        }
         fn visit_path_mut(&mut self, path: &mut syn::Path) {
-            if self.non_generic
-                && path.leading_colon.is_none()
+            if path.leading_colon.is_none()
                 && let Some(first) = path.segments.first_mut()
                 && first.ident == "Self"
             {
                 first.ident = self.name.clone();
+                if !self.lifetimes.is_empty() {
+                    let lifetimes = &self.lifetimes;
+                    first.arguments = PathArguments::AngleBracketed(syn::parse_quote! {
+                        <#(#lifetimes),*>
+                    });
+                }
             }
             syn::visit_mut::visit_path_mut(self, path);
         }
     }
     let mut ty = ty.clone();
-    syn::visit_mut::VisitMut::visit_type_mut(&mut Isolate { name, non_generic }, &mut ty);
+    syn::visit_mut::VisitMut::visit_type_mut(
+        &mut Isolate {
+            name,
+            lifetimes: generics.lifetimes().map(|l| l.lifetime.clone()).collect(),
+        },
+        &mut ty,
+    );
     ty
+}
+
+/// The struct's lifetime parameters, with their outlives bounds, for the
+/// nested fn's signature. Only lifetimes: copying type parameters or where
+/// predicates would bring back exactly what the nesting is there to avoid.
+fn nested_lifetimes(generics: &syn::Generics) -> TokenStream2 {
+    let params: Vec<syn::LifetimeParam> = generics
+        .lifetimes()
+        .map(|p| {
+            let mut p = p.clone();
+            p.attrs.clear();
+            p
+        })
+        .collect();
+    if params.is_empty() {
+        quote! {}
+    } else {
+        quote! { <#(#params),*> }
+    }
 }
 
 /// Whether `ty` mentions any of `params` (the struct's type parameters).
@@ -952,7 +980,7 @@ fn emit_check(
     field_name: &str,
     rule: Rule,
     optional: Optional,
-    isolated: Option<&Type>,
+    isolated: Option<(&Type, &TokenStream2)>,
 ) -> TokenStream2 {
     let Rule { check, span } = rule;
     let Locals {
@@ -1121,12 +1149,12 @@ fn emit_check(
         // check is chosen by the inner type; see `not_empty_helpers`.
         Check::Required if optional == Optional::Concrete => {
             let check = match isolated {
-                Some(ty) => quote! {
+                Some((ty, lifetimes)) => quote! {
                     {
                         // The value arrives wrapped (and `Copy`), so the
                         // signature names no `&Cow<..>`-style parameter for
                         // user lints such as `clippy::ptr_arg` to flag.
-                        fn __armature_required(
+                        fn __armature_required #lifetimes (
                             value: __ArmatureNotEmpty<'_, #ty>,
                             field: &str,
                         ) -> ::std::option::Option<#krate::ValidationError> {
