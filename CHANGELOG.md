@@ -14,7 +14,10 @@ errors under a new field path, rejects at compile time attribute forms it used
 to accept (invalid or oversized regex patterns, unknown `regex(...)` keys,
 duplicate or inverted bounds, empty `#[validate()]`, non-`usize` length
 bounds, struct-level `#[validate(...)]` other than `crate`), and no longer
-attaches submitted values to errors.
+attaches submitted values to errors. The generated code needs
+`armature-validation` 0.7 or later (`ValidationError::value`, `Matches`).
+Code importing the derive through `armature_validation::Validate` gets
+these fixes only once `armature-validation` depends on this release.
 
 ### Security
 
@@ -29,6 +32,11 @@ attaches submitted values to errors.
   generated code now clears it on every error it collects — built-in rules,
   `custom` validators (which may call a built-in validator) and nested
   `Validate` impls — since validation errors are sent to clients.
+- **A `regex` pattern's text no longer reaches clients.** 0.6 turned an
+  invalid pattern into a runtime error `invalid regex pattern: <parser
+  output>`, exposing the pattern; patterns are now checked at compile time,
+  and the remaining runtime fallback says only that the field could not be
+  validated (constraint `matches`, was `regex`).
 - **`regex(pattern = ...)` no longer accepts any key.** `regex(full = ...)` or
   a typo such as `regex(patern = ...)` silently became a substring match; an
   unknown key is now a compile error, and `regex(full = "...")` is a real

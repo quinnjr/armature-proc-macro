@@ -37,10 +37,4 @@ struct BoundlessRange {
     a: u8,
 }
 
-#[derive(Validate)]
-struct WrongType {
-    #[validate(email)]
-    a: u32,
-}
-
 fn main() {}

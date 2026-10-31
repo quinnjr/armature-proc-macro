@@ -22,6 +22,9 @@ proc-macro2 = "1.0"
 # dependency or the `armature-framework` facade), and compiles `regex`
 # patterns at expansion time with the same engine and limits as the runtime.
 proc-macro-crate = "3.5"
+# Default features, like the runtime: with fewer, `regex` builds smaller
+# programs and accepts patterns (`\w{300}`) the runtime then rejects as over
+# its size limit, so the expansion-time check would disagree with it.
 regex = "1.13"
 regex-syntax = "0.8"
 

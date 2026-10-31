@@ -1,5 +1,17 @@
 //! Behaviour of `#[derive(Validate)]`, against the published
 //! `armature-validation` runtime.
+//!
+//! Strict lints, so CI's clippy run also covers the generated code.
+#![deny(clippy::pedantic, clippy::nursery)]
+// Lints on the tests' own code, not the generated code.
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::unnecessary_wraps,
+    clippy::items_after_statements,
+    // `custom` validators take `&Field` by the derive's contract.
+    clippy::ref_option,
+    clippy::trivially_copy_pass_by_ref
+)]
 
 use armature_proc_macro::Validate;
 use armature_validation::{Validate as _, ValidationError};
@@ -302,7 +314,31 @@ fn raw_identifier_fields_are_reported_unraw() {
 }
 
 /// Generated locals cannot be reached from user expressions: a `custom`
-/// closure naming `__armature_errors` refers to the user's own item.
+/// closure naming `__armature_errors` refers to the user's own item, so it
+/// cannot clear the derive's error list.
+#[test]
+fn custom_closures_cannot_reach_generated_locals() {
+    let calls = std::cell::Cell::new(0);
+    let __armature_errors = &calls;
+    let _ = __armature_errors;
+    #[derive(Validate)]
+    struct S {
+        #[validate(length(min = 5))]
+        a: String,
+        #[validate(
+            custom = "|_: &String| -> Result<(), ValidationError> { let __armature_errors: Vec<u8> = Vec::new(); drop(__armature_errors); Ok(()) }"
+        )]
+        b: String,
+    }
+    let errors = S {
+        a: "x".into(),
+        b: String::new(),
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(fields(&errors), ["a"]);
+}
+
 #[test]
 fn generated_locals_are_hygienic() {
     #[allow(non_upper_case_globals)]

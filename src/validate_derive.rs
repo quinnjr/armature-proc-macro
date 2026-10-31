@@ -249,8 +249,8 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         let (whole, body) = (emit(whole), emit(unwrapped));
         let too_long = &locals.too_long;
         let body = quote! {
-            #[allow(unused_mut, unused_variables)]
-            let mut #too_long = false;
+            #[allow(unused_variables)]
+            let #too_long = false;
             #(#body)*
         };
         let value = &locals.value;
@@ -615,12 +615,17 @@ fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rul
                 let m = as_usize(&m);
                 let call =
                     quote_spanned! {span=> #krate::MaxLength(#m).validate(#at_rule, #field_name) };
+                // Shadows the flag rather than assigning it, so the generated
+                // code has no `let mut` + `if` for user lints to flag.
                 quote! {
-                    if let ::std::result::Result::Err(mut #error) = #call {
+                    #[allow(unused_variables)]
+                    let #too_long = if let ::std::result::Result::Err(mut #error) = #call {
                         #error.value = ::std::option::Option::None;
                         #errors.push(#error);
-                        #too_long = true;
-                    }
+                        true
+                    } else {
+                        false
+                    };
                 }
             });
             quote! { #min_check #max_check }
