@@ -24,12 +24,23 @@ struct EmptyValidate {
     a: String,
 }
 
-const NEG: i64 = -1;
+#[derive(Validate)]
+struct DuplicateRule {
+    #[validate(email)]
+    #[validate(email)]
+    a: String,
+}
 
 #[derive(Validate)]
-struct LengthBoundNotUsize {
-    #[validate(length(max = NEG))]
-    a: String,
+struct BoundlessRange {
+    #[validate(range())]
+    a: u8,
+}
+
+#[derive(Validate)]
+struct WrongType {
+    #[validate(email)]
+    a: u32,
 }
 
 fn main() {}

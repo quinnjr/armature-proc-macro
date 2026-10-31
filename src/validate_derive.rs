@@ -12,7 +12,13 @@ use syn::{
     ext::IdentExt, parse_macro_input, spanned::Spanned,
 };
 
-/// A single validation check to emit for a field.
+/// A single validation check to emit for a field, with the span of the rule
+/// in the attribute so type errors point at it.
+struct Rule {
+    check: Check,
+    span: Span,
+}
+
 enum Check {
     Length {
         min: Option<Expr>,
@@ -42,6 +48,9 @@ struct Locals {
     errors: syn::Ident,
     value: syn::Ident,
     error: syn::Ident,
+    /// Set when a field fails `length(max = ..)`; its scanning rules are then
+    /// skipped rather than run over an oversized value.
+    too_long: syn::Ident,
 }
 
 impl Locals {
@@ -51,6 +60,7 @@ impl Locals {
             errors: ident("__armature_errors"),
             value: ident("__armature_value"),
             error: ident("__armature_error"),
+            too_long: ident("__armature_too_long"),
         }
     }
 }
@@ -96,7 +106,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         // `r#type` is reported to clients as `type`.
         let field_name = field_ident.unraw().to_string();
 
-        let mut checks: Vec<Check> = Vec::new();
+        let mut checks: Vec<Rule> = Vec::new();
         for attr in &field.attrs {
             if !attr.path().is_ident("validate") {
                 continue;
@@ -104,11 +114,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
 
             // Bare `#[validate]` means "recurse into this nested struct".
             if matches!(attr.meta, syn::Meta::Path(_)) {
-                checks.push(Check::Nested);
+                checks.push(Rule {
+                    check: Check::Nested,
+                    span: attr.span(),
+                });
                 continue;
             }
             let before = checks.len();
             attr.parse_nested_meta(|meta| {
+                let span = meta.path.span();
+                let mut push = |check: Check| checks.push(Rule { check, span });
                 let Some(ident) = meta.path.get_ident().map(|i| i.to_string()) else {
                     let path = &meta.path;
                     return Err(meta.error(format!(
@@ -121,33 +136,39 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     "length" => {
                         let (min, max) = parse_min_max(&meta)?;
                         reject_inverted(&meta, &min, &max)?;
-                        checks.push(Check::Length { min, max });
+                        if min.is_none() && max.is_none() {
+                            return Err(meta.error("`length` needs `min`, `max` or both"));
+                        }
+                        push(Check::Length { min, max });
                         Ok(())
                     }
                     "range" => {
                         let (min, max) = parse_min_max(&meta)?;
                         reject_inverted(&meta, &min, &max)?;
-                        checks.push(Check::Range { min, max });
+                        if min.is_none() && max.is_none() {
+                            return Err(meta.error("`range` needs `min`, `max` or both"));
+                        }
+                        push(Check::Range { min, max });
                         Ok(())
                     }
                     "email" => {
-                        checks.push(Check::Email);
+                        push(Check::Email);
                         Ok(())
                     }
                     "url" => {
-                        checks.push(Check::Url);
+                        push(Check::Url);
                         Ok(())
                     }
                     "required" => {
-                        checks.push(Check::Required);
+                        push(Check::Required);
                         Ok(())
                     }
                     "nested" => {
-                        checks.push(Check::Nested);
+                        push(Check::Nested);
                         Ok(())
                     }
                     "regex" => {
-                        checks.push(Check::Regex(parse_regex_pattern(&meta)?));
+                        push(Check::Regex(parse_regex_pattern(&meta)?));
                         Ok(())
                     }
                     "custom" | "custom_with_field" => {
@@ -160,7 +181,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                             syn::parenthesized!(content in meta.input);
                             content.parse()?
                         };
-                        checks.push(Check::Custom {
+                        push(Check::Custom {
                             func,
                             with_field: ident == "custom_with_field",
                         });
@@ -170,8 +191,12 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 }
             })?;
             if checks.len() == before {
+                let span = match &attr.meta {
+                    syn::Meta::List(list) => list.delimiter.span().join(),
+                    meta => meta.span(),
+                };
                 return Err(syn::Error::new(
-                    attr.span(),
+                    span,
                     "empty `#[validate()]`: name at least one rule",
                 ));
             }
@@ -180,16 +205,71 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
         if checks.is_empty() {
             continue;
         }
-        let required = checks.iter().any(|c| matches!(c, Check::Required));
-        let body: Vec<TokenStream2> = checks
+        // A rule repeated on one field only duplicates its errors, and a
+        // repeated `length`/`range` hides which bounds apply. `regex` and
+        // `custom` may legitimately appear more than once.
+        let mut seen = std::collections::HashSet::new();
+        for rule in &checks {
+            let kind = match &rule.check {
+                Check::Length { .. } => "length",
+                Check::Range { .. } => "range",
+                Check::Email => "email",
+                Check::Url => "url",
+                Check::Required => "required",
+                Check::Nested => "nested",
+                Check::Regex(_) | Check::Custom { .. } => continue,
+            };
+            if !seen.insert(kind) {
+                return Err(syn::Error::new(
+                    rule.span,
+                    format!("duplicate `{kind}` rule on this field"),
+                ));
+            }
+        }
+
+        let inner = option_inner(&field.ty);
+        let required = checks.iter().any(|r| matches!(r.check, Check::Required));
+        // `required` on a non-string `Option` means only "is `Some`".
+        let string_like = inner.is_none_or(is_string_like);
+        let access = quote! { self.#field_ident };
+        let (whole, mut unwrapped): (Vec<Rule>, Vec<Rule>) = checks
             .into_iter()
-            .map(|check| emit_check(&krate, &locals, &field_name, check))
-            .collect();
+            .filter(|r| string_like || !matches!(r.check, Check::Required))
+            .partition(|r| matches!(r.check, Check::Custom { .. }));
+        // `length` first, so a value over its maximum is not then scanned by
+        // `email`, `url` and `regex`.
+        unwrapped.sort_by_key(|r| !matches!(r.check, Check::Length { .. }));
+        let unwrapped_empty = unwrapped.is_empty();
+        let emit = |rules: Vec<Rule>| -> Vec<TokenStream2> {
+            rules
+                .into_iter()
+                .map(|rule| emit_check(&krate, &locals, &field_name, rule))
+                .collect()
+        };
+        let (whole, body) = (emit(whole), emit(unwrapped));
+        let too_long = &locals.too_long;
+        let body = quote! {
+            #[allow(unused_mut, unused_variables)]
+            let mut #too_long = false;
+            #(#body)*
+        };
         let value = &locals.value;
-        // An `Option<T>` field is validated when present and skipped when
-        // `None` (unless `required`); anything else is validated as is.
-        // Either way the checks see `__armature_value: &T`.
-        field_checks.push(if option_inner(&field.ty).is_some() {
+        // The built-in rules on an `Option<T>` field see the value when it is
+        // `Some` and are skipped for `None` (unless `required`); on any other
+        // field they see it as is. Either way they get `__armature_value: &T`.
+        // `custom` rules always get the whole field, `Option` included, so a
+        // custom function can still act on `None`.
+        let custom = quote! {
+            {
+                let #value = &#access;
+                #(#whole)*
+            }
+        };
+        field_checks.push(custom);
+        if unwrapped_empty && !required {
+            continue;
+        }
+        field_checks.push(if inner.is_some() {
             // `required` on an optional field also rejects `None`.
             let missing = required.then(|| {
                 let errors = &locals.errors;
@@ -205,16 +285,16 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     }
                 }
             });
-            quote_spanned! {field.ty.span()=>
-                if let ::std::option::Option::Some(#value) = &self.#field_ident {
-                    #(#body)*
+            quote! {
+                if let ::std::option::Option::Some(#value) = &#access {
+                    #body
                 } #missing
             }
         } else {
-            quote_spanned! {field.ty.span()=>
+            quote! {
                 {
-                    let #value = &self.#field_ident;
-                    #(#body)*
+                    let #value = &#access;
+                    #body
                 }
             }
         });
@@ -237,8 +317,30 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     })
 }
 
+/// Whether a type is a string the built-in string rules accept: `String`,
+/// `str`, `Cow<str>`, or a reference to one.
+fn is_string_like(ty: &Type) -> bool {
+    match ty {
+        Type::Reference(r) => is_string_like(&r.elem),
+        Type::Group(g) => is_string_like(&g.elem),
+        Type::Paren(p) => is_string_like(&p.elem),
+        Type::Path(p) => p
+            .path
+            .segments
+            .last()
+            .is_some_and(|s| matches!(s.ident.to_string().as_str(), "String" | "str" | "Cow")),
+        _ => false,
+    }
+}
+
 /// `T` if `ty` is written as `Option<T>` (or a path ending in `Option<T>`).
+/// Detection is syntactic: a type alias for `Option` is not seen through.
 fn option_inner(ty: &Type) -> Option<&Type> {
+    let ty = match ty {
+        Type::Group(g) => return option_inner(&g.elem),
+        Type::Paren(p) => return option_inner(&p.elem),
+        ty => ty,
+    };
     let Type::Path(path) = ty else {
         return None;
     };
@@ -308,7 +410,10 @@ fn resolve_crate_path(
         // `Itself` is the library itself (and its unit tests, examples and
         // doctests); `armature-validation` declares
         // `extern crate self as armature_validation` for it.
-        (Some(FoundCrate::Itself) | None, Some(FoundCrate::Name(name))) => {
+        // The crate itself, before any facade: a facade would be a second
+        // copy of it.
+        (Some(FoundCrate::Itself), _) => quote! { ::armature_validation },
+        (None, Some(FoundCrate::Name(name))) => {
             // Not renamed: the extern name is the library name, `armature`.
             if name == "armature_framework" {
                 quote! { ::armature::armature_validation }
@@ -321,11 +426,20 @@ fn resolve_crate_path(
     }
 }
 
-/// An extern crate name as an identifier, raw if it is a keyword
-/// (`r#match = { package = "armature-validation" }`).
-fn extern_ident(name: &str) -> syn::Ident {
-    syn::parse_str::<syn::Ident>(name)
-        .unwrap_or_else(|_| syn::Ident::new_raw(name, Span::call_site()))
+/// An extern crate name as a path segment: raw if it is a keyword
+/// (`r#match = { package = "armature-validation" }`). `self`, `super`,
+/// `crate` and `Self` cannot be raw, and `_` cannot name a crate; those fall
+/// back to the crate's real name, which the user can override with
+/// `#[validate(crate = "...")]`.
+fn extern_ident(name: &str) -> TokenStream2 {
+    if let Ok(ident) = syn::parse_str::<syn::Ident>(name) {
+        return quote! { #ident };
+    }
+    if matches!(name, "self" | "super" | "crate" | "Self" | "_") {
+        return quote! { armature_validation };
+    }
+    let ident = syn::Ident::new_raw(name, Span::call_site());
+    quote! { #ident }
 }
 
 /// Parse `min = <expr>, max = <expr>` (either optional, each at most once)
@@ -357,26 +471,47 @@ fn reject_inverted(
     min: &Option<Expr>,
     max: &Option<Expr>,
 ) -> syn::Result<()> {
-    fn literal(expr: &Option<Expr>) -> Option<f64> {
+    // Integers compare exactly as `i128` (an `f64` loses precision above
+    // 2^53); floats as `f64`.
+    #[derive(PartialEq, PartialOrd)]
+    enum Num {
+        Int(i128),
+        Float(f64),
+    }
+    impl std::ops::Neg for Num {
+        type Output = Num;
+        fn neg(self) -> Num {
+            match self {
+                Num::Int(i) => Num::Int(-i),
+                Num::Float(f) => Num::Float(-f),
+            }
+        }
+    }
+    fn literal(expr: &Option<Expr>) -> Option<Num> {
         match expr.as_ref()? {
             Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Int(i),
                 ..
-            }) => i.base10_digits().parse().ok(),
+            }) => i.base10_parse::<i128>().ok().map(Num::Int),
             Expr::Lit(syn::ExprLit {
                 lit: syn::Lit::Float(f),
                 ..
-            }) => f.base10_digits().parse().ok(),
+            }) => f.base10_parse::<f64>().ok().map(Num::Float),
             Expr::Unary(syn::ExprUnary {
                 op: syn::UnOp::Neg(_),
                 expr,
                 ..
-            }) => literal(&Some((**expr).clone())).map(|v| -v),
+            }) => literal(&Some((**expr).clone())).map(std::ops::Neg::neg),
             _ => None,
         }
     }
     match (literal(min), literal(max)) {
-        (Some(lo), Some(hi)) if lo > hi => Err(meta.error("`min` is greater than `max`")),
+        (Some(Num::Int(lo)), Some(Num::Int(hi))) if lo > hi => {
+            Err(meta.error("`min` is greater than `max`"))
+        }
+        (Some(Num::Float(lo)), Some(Num::Float(hi))) if lo > hi => {
+            Err(meta.error("`min` is greater than `max`"))
+        }
         _ => Ok(()),
     }
 }
@@ -415,18 +550,18 @@ fn parse_regex_pattern(meta: &syn::meta::ParseNestedMeta) -> syn::Result<LitStr>
         (content.parse()?, full)
     };
     let bare = lit.value();
-    let compiled = regex::Regex::new(&bare).and_then(|regex| {
-        if full {
-            regex::Regex::new(&anchored(&bare))
-        } else {
-            Ok(regex)
-        }
-    });
-    if let Err(e) = compiled {
-        return Err(syn::Error::new(
-            lit.span(),
-            format!("invalid regex pattern: {e}"),
-        ));
+    let invalid = |e: &dyn std::fmt::Display| {
+        syn::Error::new(lit.span(), format!("invalid regex pattern: {e}"))
+    };
+    if full {
+        // Parsing the bare pattern is enough to reject one that would close
+        // the anchoring group early; only the anchored form is compiled.
+        regex_syntax::Parser::new()
+            .parse(&bare)
+            .map_err(|e| invalid(&e))?;
+        regex::Regex::new(&anchored(&bare)).map_err(|e| invalid(&e))?;
+    } else {
+        regex::Regex::new(&bare).map_err(|e| invalid(&e))?;
     }
     Ok(if full {
         LitStr::new(&anchored(&bare), lit.span())
@@ -436,21 +571,20 @@ fn parse_regex_pattern(meta: &syn::meta::ParseNestedMeta) -> syn::Result<LitStr>
 }
 
 /// `pattern` anchored to the whole value. `\A`/`\z` mean the ends of the
-/// value even under `(?m)`, unlike `^`/`$`.
+/// value even under `(?m)`, unlike `^`/`$`. A verbose-mode (`(?x)`) pattern
+/// ending in a `#` comment would swallow the closing `)` and is rejected; end
+/// it with a newline.
 fn anchored(pattern: &str) -> String {
     format!(r"\A(?:{pattern})\z")
 }
 
-fn emit_check(
-    krate: &TokenStream2,
-    locals: &Locals,
-    field_name: &str,
-    check: Check,
-) -> TokenStream2 {
+fn emit_check(krate: &TokenStream2, locals: &Locals, field_name: &str, rule: Rule) -> TokenStream2 {
+    let Rule { check, span } = rule;
     let Locals {
         errors,
         value,
         error,
+        too_long,
     } = locals;
     // Errors from the built-in validators are pushed without the submitted
     // value: errors reach clients, and some runtime versions attach it.
@@ -462,15 +596,32 @@ fn emit_check(
             }
         }
     };
+    let unless_too_long = |check: TokenStream2| quote! { if !#too_long { #check } };
+    // The value binding, located at the rule: same hygiene, so it names the
+    // same local, but a type error (`email` on a `u32`) points at the rule
+    // rather than at `#[derive(Validate)]`.
+    let at_rule = syn::Ident::new(&value.to_string(), Span::mixed_site().located_at(span));
     match check {
         Check::Length { min, max } => {
             let min_check = min.map(|m| {
                 let m = as_usize(&m);
-                push_builtin(quote! { #krate::MinLength(#m).validate(#value, #field_name) })
+                push_builtin(
+                    quote_spanned! {span=> #krate::MinLength(#m).validate(#at_rule, #field_name) },
+                )
             });
+            // A failed maximum also marks the field, so the scanning rules
+            // after it are skipped.
             let max_check = max.map(|m| {
                 let m = as_usize(&m);
-                push_builtin(quote! { #krate::MaxLength(#m).validate(#value, #field_name) })
+                let call =
+                    quote_spanned! {span=> #krate::MaxLength(#m).validate(#at_rule, #field_name) };
+                quote! {
+                    if let ::std::result::Result::Err(mut #error) = #call {
+                        #error.value = ::std::option::Option::None;
+                        #errors.push(#error);
+                        #too_long = true;
+                    }
+                }
             });
             quote! { #min_check #max_check }
         }
@@ -481,9 +632,9 @@ fn emit_check(
             // the right side", so an unordered value (a float NaN) fails
             // rather than slipping past `value < min`, which is false for NaN.
             let fails = |bound: &syn::Ident, pass: TokenStream2| {
-                quote! {
+                quote_spanned! {span=>
                     !::core::matches!(
-                        ::core::cmp::PartialOrd::partial_cmp(#value, &#bound),
+                        ::core::cmp::PartialOrd::partial_cmp(#value, #bound),
                         ::core::option::Option::Some(#pass)
                     )
                 }
@@ -500,17 +651,17 @@ fn emit_check(
             // the message.
             let (bind, cond, message) = match (&min, &max) {
                 (Some(min), Some(max)) => (
-                    quote! { let #lo = #min; let #hi = #max; },
+                    quote! { let #lo = &(#min); let #hi = &(#max); },
                     quote! { (#below) || (#above) },
                     quote! { ::std::format!("{} must be between {} and {}", #field_name, #lo, #hi) },
                 ),
                 (Some(min), None) => (
-                    quote! { let #lo = #min; },
+                    quote! { let #lo = &(#min); },
                     below,
                     quote! { ::std::format!("{} must be at least {}", #field_name, #lo) },
                 ),
                 (None, Some(max)) => (
-                    quote! { let #hi = #max; },
+                    quote! { let #hi = &(#max); },
                     above,
                     quote! { ::std::format!("{} must be at most {}", #field_name, #hi) },
                 ),
@@ -533,8 +684,12 @@ fn emit_check(
                 }
             }
         }
-        Check::Email => push_builtin(quote! { #krate::IsEmail::validate(#value, #field_name) }),
-        Check::Url => push_builtin(quote! { #krate::IsUrl::validate(#value, #field_name) }),
+        Check::Email => unless_too_long(push_builtin(
+            quote_spanned! {span=> #krate::IsEmail::validate(#at_rule, #field_name) },
+        )),
+        Check::Url => unless_too_long(push_builtin(
+            quote_spanned! {span=> #krate::IsUrl::validate(#at_rule, #field_name) },
+        )),
         // Compiled once per rule, on first use, rather than on every
         // `validate()`. The pattern compiled at expansion time, so this
         // cannot fail short of resource exhaustion; if it does, the rule
@@ -542,8 +697,9 @@ fn emit_check(
         Check::Regex(pattern) => {
             let regex = format_ident!("__ARMATURE_VALIDATE_REGEX", span = Span::mixed_site());
             let matcher = format_ident!("__armature_matcher", span = Span::mixed_site());
-            let matched = push_builtin(quote! { #matcher.validate(#value, #field_name) });
-            quote! {
+            let matched =
+                push_builtin(quote_spanned! {span=> #matcher.validate(#at_rule, #field_name) });
+            unless_too_long(quote! {
                 {
                     static #regex: ::std::sync::LazyLock<
                         ::std::option::Option<#krate::Matches>,
@@ -561,12 +717,15 @@ fn emit_check(
                         }
                     }
                 }
-            }
+            })
         }
-        Check::Required => push_builtin(quote! { #krate::NotEmpty::validate(#value, #field_name) }),
+        Check::Required => {
+            push_builtin(quote_spanned! {span=> #krate::NotEmpty::validate(#at_rule, #field_name) })
+        }
         // A custom error with an empty field is attributed to this field, so
         // one function can serve several fields without naming any of them.
-        // A value the function attached on purpose is kept.
+        // Its value is cleared like a built-in rule's: a custom function that
+        // calls a built-in validator would otherwise pass the value on.
         Check::Custom { func, with_field } => {
             let call = if with_field {
                 quote! { (#func)(#value, #field_name) }
@@ -579,6 +738,7 @@ fn emit_check(
             quote! {
                 if let ::std::result::Result::Err(#error) = #call {
                     let mut #error: #krate::ValidationError = #error;
+                    #error.value = ::std::option::Option::None;
                     if #error.field.is_empty() {
                         #error.field = ::std::string::String::from(#field_name);
                     }
@@ -595,6 +755,8 @@ fn emit_check(
                 #krate::Validate::validate(#value)
             {
                 #errors.extend(#nested.into_iter().map(|mut #error| {
+                    // A hand-written nested impl may have attached it.
+                    #error.value = ::std::option::Option::None;
                     #error.field = if #error.field.is_empty() {
                         ::std::string::String::from(#field_name)
                     } else {
@@ -617,11 +779,16 @@ fn as_usize(expr: &Expr) -> TokenStream2 {
         ..
     }) = expr
         && int.suffix().is_empty()
-        && let Ok(lit) = syn::parse_str::<LitInt>(&format!("{}usize", int.base10_digits()))
     {
+        // Built at the literal's span, so `overflowing_literals` still
+        // rejects a value that does not fit.
+        let lit = LitInt::new(&format!("{}usize", int.base10_digits()), int.span());
         return quote! { #lit };
     }
-    quote_spanned! {expr.span()=> { let __armature_bound: usize = #expr; __armature_bound } }
+    let bound = format_ident!("__armature_bound", span = Span::mixed_site());
+    quote_spanned! {expr.span()=>
+        { let #bound: ::core::primitive::usize = #expr; #bound }
+    }
 }
 
 #[cfg(test)]
@@ -655,7 +822,7 @@ mod tests {
         assert_eq!(path(None, name("fw")), "::fw::armature_validation");
         assert_eq!(
             path(Some(FoundCrate::Itself), name("armature_framework")),
-            "::armature::armature_validation"
+            "::armature_validation"
         );
     }
 

@@ -26,9 +26,9 @@ attaches submitted values to errors.
 - **Errors no longer carry the submitted value (breaking).** `range` attached
   it with `with_value`, and the built-in validators behind `length`, `email`,
   `url`, `regex` and `required` attach it in `armature-validation` 0.7.0; the
-  generated code now clears it on every built-in rule's error, since
-  validation errors are sent to clients. A value a `custom` validator attaches
-  on purpose is kept.
+  generated code now clears it on every error it collects — built-in rules,
+  `custom` validators (which may call a built-in validator) and nested
+  `Validate` impls — since validation errors are sent to clients.
 - **`regex(pattern = ...)` no longer accepts any key.** `regex(full = ...)` or
   a typo such as `regex(patern = ...)` silently became a substring match; an
   unknown key is now a compile error, and `regex(full = "...")` is a real
@@ -39,6 +39,8 @@ attaches submitted values to errors.
   error.
 - **`regex` patterns are compiled once per rule instead of on every
   `validate()` call.**
+- **A field that fails `length(max = ..)` skips its `email`, `url` and
+  `regex` rules**, so an oversized value is not scanned by every rule.
 
 ### Changed
 
@@ -49,15 +51,22 @@ attaches submitted values to errors.
 - **Breaking:** errors from a nested `#[validate]` field are prefixed with the
   parent field's name (`billing.city`), so two fields of the same type report
   distinct paths.
-- **Breaking:** duplicate `min`/`max` keys, literal bounds with `min > max`, an
-  empty `#[validate()]`, and struct-level `#[validate(...)]` other than
+- **Breaking:** duplicate `min`/`max` keys, literal bounds with `min > max`
+  (integers compared exactly), `length()`/`range()` with no bounds, a rule
+  repeated on one field (other than `regex` and `custom`), an empty
+  `#[validate()]`, and struct-level `#[validate(...)]` other than
   `crate = "..."` (previously ignored) are compile errors.
-- `range` compares through a reference (non-`Copy` fields work) and evaluates
-  each bound expression once.
+- **Breaking:** field names are reported unraw (`r#type` as `type`), which
+  changes the `field` clients see for raw-identifier fields.
+- `range` compares the field and each bound by reference, so non-`Copy`
+  fields and bounds such as `min = self.other` work, and evaluates each bound
+  expression once. A one-sided float bound admits infinity (`range(min =
+  0.01)` accepts `inf`); give both bounds to exclude it.
+- A type error from a rule (`email` on a `u32`) points at the rule, not at
+  `#[derive(Validate)]`.
 - An error returned by a `custom` validator with an empty `field` is
   attributed to the annotated field; the error type is fixed to
   `ValidationError`, so a validator generic over its error type still infers.
-- Field names are reported unraw (`r#type` as `type`).
 - Generated locals use mixed-site hygiene and every macro call is fully
   qualified, so user items named `errors` or `e`, or a user `format!`, cannot
   collide with or alter the generated code. The impl is
@@ -65,20 +74,28 @@ attaches submitted values to errors.
 - The generated code finds `armature-validation` through the deriving crate's
   manifest: a renamed dependency, or the `armature-framework` facade (as
   `::armature::armature_validation`, or under its renamed key), instead of
-  assuming `::armature_validation`.
+  assuming `::armature_validation`. A dependency renamed to a keyword is
+  written as a raw identifier; one renamed to `self`, `crate` or similar
+  falls back to `::armature_validation` (override with `crate = "..."`). If
+  the crate is only a dev-dependency while the facade is a normal one, name
+  the path with `crate = "..."`.
 
 ### Added
 
-- `Option<T>` fields: rules apply to the value when present; `required` also
-  rejects `None`.
+- `Option<T>` fields (detected syntactically; a type alias is not seen
+  through): built-in rules and `nested` apply to the value when it is `Some`
+  and are skipped for `None`; `required` also rejects `None` (and on a
+  non-string `Option` means only "is `Some`"). `custom` validators still get
+  the whole `&Option<T>`, as before, so they can act on `None`.
 - `regex(full = "...")`, anchored to the whole value with `\A…\z` (which,
   unlike `^…$`, holds under `(?m)`).
 - `custom_with_field = "fn"`, which passes the field name to the validator
   (`fn(&Field, &str)`), so one function can serve several fields.
 - Struct-level `#[validate(crate = "path")]` to name the path to
   `armature-validation` explicitly.
-- Dependencies: `proc-macro-crate` (crate-path resolution) and `regex`
-  (expansion-time pattern compilation).
+- Dependencies: `proc-macro-crate` (crate-path resolution), `regex`
+  (expansion-time pattern compilation) and `regex-syntax` (checking the bare
+  pattern of `regex(full = ...)`).
 
 ## [0.6.0] - 2026-10-29
 

@@ -245,7 +245,8 @@ pub fn query_derive(input: TokenStream) -> TokenStream {
 ///   which holds even under `(?m)`, unlike `^…$`). The pattern is compiled
 ///   when the derive expands, so a bad pattern is a compile error, and
 ///   compiled once at runtime rather than per `validate()` call
-/// - `required` — has visible content (and, on an `Option`, is `Some`)
+/// - `required` — not empty, as the runtime's `NotEmpty` defines it (and, on
+///   an `Option`, is `Some`; on a non-string `Option`, only that)
 /// - `custom = "path::to::fn"` — a `fn(&Field) -> Result<(), ValidationError>`;
 ///   an error whose `field` is empty is attributed to this field
 /// - `custom_with_field = "path::to::fn"` — the same, but the function is also
@@ -254,9 +255,13 @@ pub fn query_derive(input: TokenStream) -> TokenStream {
 ///   field that also implements `Validate`; its errors' fields are prefixed
 ///   with this field's name (`address.city`)
 ///
-/// On an `Option<T>` field the rules apply to the value when it is `Some`.
-/// Errors from built-in rules never carry the submitted value; they are sent
-/// to clients. Field names are reported unraw (`r#type` as `type`).
+/// On a field written as `Option<T>` the built-in rules and `nested` apply to
+/// the value when it is `Some`; `custom` gets the whole `&Option<T>`. A field
+/// that fails `length(max = ..)` skips its `email`, `url` and `regex` rules.
+/// No collected error carries the submitted value; errors are sent to
+/// clients. Field names are reported unraw (`r#type` as `type`). A one-sided
+/// float `range` admits infinity. Nested paths are rebuilt at every level, so
+/// a recursive type should be depth-limited when deserialized.
 ///
 /// The generated code reaches `armature-validation` through the deriving
 /// crate's own dependency on it, under whatever name it was given, or the

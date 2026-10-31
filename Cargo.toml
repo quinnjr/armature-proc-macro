@@ -23,6 +23,7 @@ proc-macro2 = "1.0"
 # patterns at expansion time with the same engine and limits as the runtime.
 proc-macro-crate = "3.5"
 regex = "1.13"
+regex-syntax = "0.8"
 
 [dev-dependencies]
 cargo-husky = { version = "1.5", default-features = false, features = ["user-hooks"] }

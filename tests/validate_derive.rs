@@ -329,3 +329,124 @@ fn generated_locals_are_hygienic() {
         ["a", "b"]
     );
 }
+
+fn must_be_some(v: &Option<u32>) -> Result<(), ValidationError> {
+    if v.is_some() {
+        Ok(())
+    } else {
+        Err(ValidationError::new("", "is required"))
+    }
+}
+
+/// `custom` gets the whole field, `Option` included, so it still runs on
+/// `None`; `required` on a non-string `Option` means "is `Some`".
+#[test]
+fn option_fields_keep_custom_and_required_semantics() {
+    #[derive(Validate)]
+    struct Prefs {
+        #[validate(custom = "must_be_some")]
+        a: Option<u32>,
+        #[validate(required, range(max = 10))]
+        b: Option<u32>,
+    }
+    let none = Prefs { a: None, b: None };
+    assert_eq!(fields(&none.validate().unwrap_err()), ["a", "b"]);
+    let big = Prefs {
+        a: Some(1),
+        b: Some(11),
+    };
+    assert_eq!(fields(&big.validate().unwrap_err()), ["b"]);
+    let ok = Prefs {
+        a: Some(1),
+        b: Some(3),
+    };
+    assert!(ok.validate().is_ok());
+}
+
+#[test]
+fn optional_nested_structs_are_validated_when_present() {
+    #[derive(Validate)]
+    struct Address {
+        #[validate(required)]
+        city: String,
+    }
+    #[derive(Validate)]
+    struct Order {
+        #[validate]
+        shipping: Option<Address>,
+    }
+    assert!(Order { shipping: None }.validate().is_ok());
+    let bad = Order {
+        shipping: Some(Address {
+            city: String::new(),
+        }),
+    };
+    assert_eq!(fields(&bad.validate().unwrap_err()), ["shipping.city"]);
+}
+
+/// A hand-written nested impl that attaches a value has it cleared too.
+#[test]
+fn nested_errors_from_hand_written_impls_lose_their_value() {
+    struct Inner(String);
+    impl armature_validation::Validate for Inner {
+        fn validate(&self) -> Result<(), Vec<ValidationError>> {
+            Err(vec![
+                ValidationError::new("name", "too short").with_value(self.0.clone()),
+            ])
+        }
+    }
+    #[derive(Validate)]
+    struct Outer {
+        #[validate]
+        inner: Inner,
+    }
+    let errors = Outer {
+        inner: Inner("s3cr3t".into()),
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(fields(&errors), ["inner.name"]);
+    assert!(errors[0].value.is_none());
+}
+
+/// A bound from another, non-`Copy` field is compared by reference.
+#[test]
+fn range_bounds_may_borrow_other_fields() {
+    #[derive(Validate)]
+    struct Window {
+        #[validate(range(min = self.floor))]
+        name: String,
+        floor: String,
+    }
+    let w = Window {
+        name: "a".into(),
+        floor: "b".into(),
+    };
+    assert_eq!(fields(&w.validate().unwrap_err()), ["name"]);
+}
+
+/// A value over its maximum length is not then scanned by the other rules,
+/// and a custom validator calling a built-in one does not echo the value.
+#[test]
+fn oversized_values_skip_scanning_rules_and_custom_values_are_cleared() {
+    fn custom_email(v: &str) -> Result<(), ValidationError> {
+        armature_validation::IsEmail::validate(v, "")
+    }
+    #[derive(Validate)]
+    struct S {
+        #[validate(email, regex = "^x$", length(max = 8))]
+        a: String,
+        #[validate(custom = "custom_email")]
+        b: String,
+    }
+    let errors = S {
+        a: "y".repeat(100),
+        b: "SECRET-TOKEN".into(),
+    }
+    .validate()
+    .unwrap_err();
+    let constraints: Vec<_> = errors.iter().map(|e| e.constraint.as_str()).collect();
+    assert_eq!(constraints, ["maxLength", "isEmail"]);
+    assert_eq!(fields(&errors), ["a", "b"]);
+    assert!(errors.iter().all(|e| e.value.is_none()));
+}

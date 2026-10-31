@@ -13,9 +13,10 @@ fn decorators_compile() {
 /// compile, a `crate = ...` override that does not resolve (proving it is
 /// used), and attribute mistakes that would otherwise weaken a rule silently.
 #[test]
-fn validate_derive_rejects_bad_regex() {
+fn validate_derive_rejects_bad_attributes() {
     let t = trybuild::TestCases::new();
     t.compile_fail("tests/ui/validate_bad_regex.rs");
     t.compile_fail("tests/ui/validate_bad_crate_path.rs");
     t.compile_fail("tests/ui/validate_bad_rules.rs");
+    t.compile_fail("tests/ui/validate_length_bound_type.rs");
 }
