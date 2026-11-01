@@ -1,0 +1,10 @@
+error[E0308]: mismatched types
+ --> tests/ui/validate_length_bound_type.rs:9:29
+  |
+9 |     #[validate(length(max = NEG))]
+  |                             ^^^ expected `usize`, found `i64`
+  |
+help: you can convert an `i64` to a `usize` and panic if the converted value doesn't fit
+  |
+9 |     #[validate(length(max = NEG.try_into().unwrap()))]
+  |                                ++++++++++++++++++++

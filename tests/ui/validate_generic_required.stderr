@@ -1,0 +1,150 @@
+error[E0277]: `#[validate(required)]` on an `Option` of `T` needs `T: AsRef<str>`
+ --> tests/ui/validate_generic_required.rs:5:10
+  |
+5 | #[derive(Validate)]
+  |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+6 | struct Named<T> {
+7 |     #[validate(required)]
+  |                -------- required by a bound introduced by this call
+  |
+  = note: use `custom` for a presence-only check, or, if `T` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `T` to implement `<Named<T> as Validate>::validate::__ArmatureRequiredStr`
+ --> tests/ui/validate_generic_required.rs:5:10
+  |
+5 | #[derive(Validate)]
+  |          ^^^^^^^^ type parameter would need to implement `<Named<T> as Validate>::validate::__ArmatureRequiredStr`
+  = help: consider manually implementing `<Named<T> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+  = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+  = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider restricting type parameter `T` with trait `AsRef`
+  |
+6 | struct Named<T: std::convert::AsRef<str>> {
+  |               ++++++++++++++++++++++++++
+
+error[E0277]: `#[validate(required)]` on an `Option` of `Wrapper<T>` needs `Wrapper<T>: AsRef<str>`
+  --> tests/ui/validate_generic_required.rs:15:10
+   |
+15 | #[derive(Validate)]
+   |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+16 | struct Wrapped<T> {
+17 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+help: the trait `AsRef<str>` is not implemented for `Wrapper<T>`
+  --> tests/ui/validate_generic_required.rs:13:1
+   |
+13 | struct Wrapper<T>(T);
+   | ^^^^^^^^^^^^^^^^^
+   = note: use `custom` for a presence-only check, or, if `Wrapper<T>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `Wrapper<T>` to implement `<Wrapped<T> as Validate>::validate::__ArmatureRequiredStr`
+  --> tests/ui/validate_generic_required.rs:15:10
+   |
+15 | #[derive(Validate)]
+   |          ^^^^^^^^ type parameter would need to implement `<Wrapped<T> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<Wrapped<T> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `#[validate(required)]` on an `Option` of `N<T>` needs `N<T>: AsRef<str>`
+  --> tests/ui/validate_generic_required.rs:30:10
+   |
+30 | #[derive(Validate)]
+   |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+31 | struct HiddenByMacro<T> {
+32 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+help: the trait `AsRef<str>` is not implemented for `N<T>`
+  --> tests/ui/validate_generic_required.rs:28:1
+   |
+28 | struct N<T>(T);
+   | ^^^^^^^^^^^
+   = note: use `custom` for a presence-only check, or, if `N<T>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `N<T>` to implement `<HiddenByMacro<T> as Validate>::validate::__ArmatureRequiredStr`
+  --> tests/ui/validate_generic_required.rs:30:10
+   |
+30 | #[derive(Validate)]
+   |          ^^^^^^^^ type parameter would need to implement `<HiddenByMacro<T> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<HiddenByMacro<T> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `#[validate(required)]` on an `Option` of `SelfUnderPredicate<'_>` needs `SelfUnderPredicate<'_>: AsRef<str>`
+  --> tests/ui/validate_generic_required.rs:38:10
+   |
+38 | #[derive(Validate)]
+   |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+...
+43 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+help: the trait `AsRef<str>` is not implemented for `SelfUnderPredicate<'_>`
+  --> tests/ui/validate_generic_required.rs:39:1
+   |
+39 | struct SelfUnderPredicate<'a>
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: use `custom` for a presence-only check, or, if `SelfUnderPredicate<'_>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `SelfUnderPredicate<'_>` to implement `<SelfUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+  --> tests/ui/validate_generic_required.rs:38:10
+   |
+38 | #[derive(Validate)]
+   |          ^^^^^^^^ type parameter would need to implement `<SelfUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<SelfUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `#[validate(required)]` on an `Option` of `m::Vec<T>` needs `m::Vec<T>: AsRef<str>`
+  --> tests/ui/validate_generic_required.rs:54:10
+   |
+54 | #[derive(Validate)]
+   |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+...
+59 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+help: the trait `AsRef<str>` is not implemented for `m::Vec<T>`
+  --> tests/ui/validate_generic_required.rs:51:5
+   |
+51 |     pub struct Vec<T>(pub T);
+   |     ^^^^^^^^^^^^^^^^^
+   = note: use `custom` for a presence-only check, or, if `m::Vec<T>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `m::Vec<T>` to implement `<LookalikeContainer<T> as Validate>::validate::__ArmatureRequiredStr`
+  --> tests/ui/validate_generic_required.rs:54:10
+   |
+54 | #[derive(Validate)]
+   |          ^^^^^^^^ type parameter would need to implement `<LookalikeContainer<T> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<LookalikeContainer<T> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: `#[validate(required)]` on an `Option` of `BTreeSet<SelfSetUnderPredicate<'_>>` needs `BTreeSet<SelfSetUnderPredicate<'_>>: AsRef<str>`
+  --> tests/ui/validate_generic_required.rs:65:10
+   |
+65 | #[derive(Validate)]
+   |          ^^^^^^^^ the derive cannot tell whether this generic type is a string
+...
+70 |     #[validate(required)]
+   |                -------- required by a bound introduced by this call
+   |
+   = help: the trait `AsRef<str>` is not implemented for `BTreeSet<SelfSetUnderPredicate<'_>>`
+   = note: use `custom` for a presence-only check, or, if `BTreeSet<SelfSetUnderPredicate<'_>>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `BTreeSet<SelfSetUnderPredicate<'_>>` to implement `<SelfSetUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+  --> tests/ui/validate_generic_required.rs:65:10
+   |
+65 | #[derive(Validate)]
+   |          ^^^^^^^^ type parameter would need to implement `<SelfSetUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<SelfSetUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0308]: mismatched types
+  --> tests/ui/validate_generic_required.rs:89:10
+   |
+89 | #[derive(Validate)]
+   |          ^^^^^^^^ expected `&(ShadowedPointer<'_>,)`, found `&<Rc<(_,)> as Deref>::Target`
+   |
+   = note: expected reference `&(ShadowedPointer<'a>,)`
+              found reference `&<lookalike::Rc<(ShadowedPointer<'_>,)> as Deref>::Target`
+   = help: consider constraining the associated type `<lookalike::Rc<(ShadowedPointer<'_>,)> as Deref>::Target` to `(ShadowedPointer<'a>,)`
+   = note: for more information, visit https://doc.rust-lang.org/book/ch19-03-advanced-traits.html
+   = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
