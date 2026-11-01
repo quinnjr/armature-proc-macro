@@ -9,15 +9,17 @@ Earlier changes are recorded in the workspace [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## [Unreleased]
 
-Breaking: the next release is 0.7.0. `#[derive(Validate)]` reports nested
-errors under a new field path, rejects at compile time attribute forms it used
-to accept (invalid or oversized regex patterns, unknown `regex(...)` keys,
-duplicate or inverted bounds, empty `#[validate()]`, non-`usize` length
-bounds, struct-level `#[validate(...)]` other than `crate`), and no longer
-attaches submitted values to errors. The generated code needs
-`armature-validation` 0.7 or later (`ValidationError::value`, `Matches`).
-Code importing the derive through `armature_validation::Validate` gets
-these fixes only once `armature-validation` depends on this release.
+## [0.7.0] - 2026-11-01
+
+Breaking: `#[derive(Validate)]` reports nested errors under a new field path,
+rejects at compile time attribute forms it used to accept (invalid or
+oversized regex patterns, unknown `regex(...)` keys, duplicate or inverted
+bounds, empty `#[validate()]`, non-`usize` length bounds, struct-level
+`#[validate(...)]` other than `crate`), and no longer attaches submitted
+values to errors. The generated code needs `armature-validation` 0.7 or later
+(`ValidationError::value`, `Matches`). Code importing the derive through
+`armature_validation::Validate` gets these fixes only once
+`armature-validation` depends on this release.
 
 ### Security
 
