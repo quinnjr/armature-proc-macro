@@ -117,7 +117,7 @@ note: required for `m::Vec<T>` to implement `<LookalikeContainer<T> as Validate>
    = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
    = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
 
-error[E0277]: `#[validate(required)]` on an `Option` of `std::vec::Vec<SelfVecUnderPredicate<'_>>` needs `std::vec::Vec<SelfVecUnderPredicate<'_>>: AsRef<str>`
+error[E0277]: `#[validate(required)]` on an `Option` of `BTreeSet<SelfSetUnderPredicate<'_>>` needs `BTreeSet<SelfSetUnderPredicate<'_>>: AsRef<str>`
   --> tests/ui/validate_generic_required.rs:65:10
    |
 65 | #[derive(Validate)]
@@ -126,22 +126,14 @@ error[E0277]: `#[validate(required)]` on an `Option` of `std::vec::Vec<SelfVecUn
 70 |     #[validate(required)]
    |                -------- required by a bound introduced by this call
    |
-   = help: the trait `AsRef<str>` is not implemented for `std::vec::Vec<SelfVecUnderPredicate<'_>>`
-   = note: use `custom` for a presence-only check, or, if `std::vec::Vec<SelfVecUnderPredicate<'_>>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
-help: `std::vec::Vec<T, A>` implements trait `AsRef<T>`
-  --> $RUST/alloc/src/vec/mod.rs
-   |
-   | impl<T, A: Allocator> AsRef<Vec<T, A>> for Vec<T, A> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AsRef<std::vec::Vec<T, A>>`
-...
-   | impl<T, A: Allocator> AsRef<[T]> for Vec<T, A> {
-   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `AsRef<[T]>`
-note: required for `std::vec::Vec<SelfVecUnderPredicate<'_>>` to implement `<SelfVecUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+   = help: the trait `AsRef<str>` is not implemented for `BTreeSet<SelfSetUnderPredicate<'_>>`
+   = note: use `custom` for a presence-only check, or, if `BTreeSet<SelfSetUnderPredicate<'_>>` is a string, make it `AsRef<str>` (for a type parameter, bound it)
+note: required for `BTreeSet<SelfSetUnderPredicate<'_>>` to implement `<SelfSetUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
   --> tests/ui/validate_generic_required.rs:65:10
    |
 65 | #[derive(Validate)]
-   |          ^^^^^^^^ type parameter would need to implement `<SelfVecUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
-   = help: consider manually implementing `<SelfVecUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
+   |          ^^^^^^^^ type parameter would need to implement `<SelfSetUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr`
+   = help: consider manually implementing `<SelfSetUnderPredicate<'a> as Validate>::validate::__ArmatureRequiredStr` to avoid undesired bounds caused by "imperfect derives"
    = note: to learn more, visit <https://github.com/rust-lang/rust/issues/26925>
    = note: this error originates in the derive macro `Validate` (in Nightly builds, run with -Z macro-backtrace for more info)
 

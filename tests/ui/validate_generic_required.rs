@@ -63,12 +63,12 @@ where
 // Under a where-clause type predicate, a named container of `Self` fails
 // closed (only tuples, arrays and slices are exempt).
 #[derive(Validate)]
-struct SelfVecUnderPredicate<'a>
+struct SelfSetUnderPredicate<'a>
 where
     String: Sized,
 {
     #[validate(required)]
-    kids: Option<Vec<Self>>,
+    kids: Option<std::collections::BTreeSet<Self>>,
     tag: &'a str,
 }
 
