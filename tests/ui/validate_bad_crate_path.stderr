@@ -1,0 +1,5 @@
+error[E0433]: cannot find `does_not_exist` in the crate root
+ --> tests/ui/validate_bad_crate_path.rs:5:20
+  |
+5 | #[validate(crate = "crate::does_not_exist")]
+  |                    ^^^^^^^^^^^^^^^^^^^^^^^ could not find `does_not_exist` in the crate root

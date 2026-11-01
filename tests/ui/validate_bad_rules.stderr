@@ -1,0 +1,59 @@
+error: expected `pattern = "..."` or `full = "..."`
+ --> tests/ui/validate_bad_rules.rs:5:22
+  |
+5 |     #[validate(regex(patern = "[a-z]+"))]
+  |                      ^^^^^^
+
+error: duplicate bound
+  --> tests/ui/validate_bad_rules.rs:11:32
+   |
+11 |     #[validate(range(min = 10, min = 0))]
+   |                                ^^^
+
+error: `min` is greater than `max`
+  --> tests/ui/validate_bad_rules.rs:17:16
+   |
+17 |     #[validate(length(min = 5, max = 2))]
+   |                ^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: empty `#[validate()]`: name at least one rule
+  --> tests/ui/validate_bad_rules.rs:23:15
+   |
+23 |     #[validate()]
+   |               ^^
+
+error: duplicate `email` rule on this field
+  --> tests/ui/validate_bad_rules.rs:30:16
+   |
+30 |     #[validate(email)]
+   |                ^^^^^
+
+error: unexpected end of input, expected nested attribute
+  --> tests/ui/validate_bad_rules.rs:36:22
+   |
+36 |     #[validate(range())]
+   |                      ^
+
+error: unexpected end of input, expected nested attribute
+  --> tests/ui/validate_bad_rules.rs:42:23
+   |
+42 |     #[validate(length())]
+   |                       ^
+
+error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
+  --> tests/ui/validate_bad_rules.rs:49:8
+   |
+49 |     a: Option<Option<String>>,
+   |        ^^^^^^
+
+error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
+  --> tests/ui/validate_bad_rules.rs:55:8
+   |
+55 |     a: Option<Box<Option<String>>>,
+   |        ^^^^^^
+
+error: `required` on `Option<Option<_>>` is ambiguous; use `custom`
+  --> tests/ui/validate_bad_rules.rs:61:8
+   |
+61 |     a: Option<std::pin::Pin<Box<Option<String>>>>,
+   |        ^^^^^^

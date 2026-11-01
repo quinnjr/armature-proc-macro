@@ -15,13 +15,25 @@ categories = ["development-tools::procedural-macro-helpers"]
 proc-macro = true
 
 [dependencies]
-syn = { version = "3.0", features = ["full", "extra-traits"] }
+syn = { version = "3.0", features = ["full", "extra-traits", "visit"] }
 quote = "1.0"
 proc-macro2 = "1.0"
+# `#[derive(Validate)]`: resolves the path to `armature-validation` (renamed
+# dependency or the `armature-framework` facade), and compiles `regex`
+# patterns at expansion time with the same engine and limits as the runtime.
+proc-macro-crate = "3.5"
+# Default features, like the runtime: with fewer, `regex` builds smaller
+# programs and accepts patterns (`\w{300}`) the runtime then rejects as over
+# its size limit, so the expansion-time check would disagree with it.
+regex = "1.13"
+regex-syntax = "0.8"
 
 [dev-dependencies]
 cargo-husky = { version = "1.5", default-features = false, features = ["user-hooks"] }
 armature-core = { version = "0.12" }
+# Runtime for the `#[derive(Validate)]` tests (the published crate; it
+# depends on the published macro, but the tests use this crate's derive).
+armature-validation = "0.7"
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
