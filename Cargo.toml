@@ -30,7 +30,7 @@ regex-syntax = "0.8"
 
 [dev-dependencies]
 cargo-husky = { version = "1.5", default-features = false, features = ["user-hooks"] }
-armature-core = { version = "0.12" }
+armature-core = { version = "0.13" }
 # Runtime for the `#[derive(Validate)]` tests (the published crate; it
 # depends on the published macro, but the tests use this crate's derive).
 armature-validation = "0.7"
